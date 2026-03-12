@@ -28,6 +28,8 @@ public:
 
         const char* lqr_schedule_path = nullptr;  // must be absolute
 
+        bool use_pitot_airspeed_primary = true;
+
         bool enable_debug_output = true;
         std::uint32_t debug_output_rate_hz = 10;
     };
@@ -147,6 +149,7 @@ private:
     void updateLoopTimingStats(float loop_time_ms);
     bool isRadioSignalValid() const;
     float readBatteryVoltage() const;
+    bool readMeasuredAirspeed(float& airspeed_mps) const;
 };
 
 

@@ -44,7 +44,7 @@ bool ModularFlightController::initialize() {
         return false;
     }
 
-    if (!hal_->initIMU() || !hal_->initRadio() || !hal_->initServos() || !hal_->initMotors()) {
+    if (!hal_->initIMU() || !hal_->initRadio() || !hal_->initAirspeed() || !hal_->initServos() || !hal_->initMotors()) {
         return false;
     }
     airspeed_sensor_.init();
@@ -71,9 +71,17 @@ FlightState ModularFlightController::buildFlightState(float dt_s, std::uint32_t 
         s.yaw_rad += s.r_rad_s * dt_s;
     }
 
-    const AirspeedEstimate air = airspeed_sensor_.update(dt_s, 0.0f);
-    s.airspeed_mps = air.airspeed_mps;
-    s.airspeed_valid = air.valid;
+    float pitot_airspeed_mps = 0.0f;
+    const bool pitot_ok = hal_->readAirspeed(&pitot_airspeed_mps) && hal_->isAirspeedHealthy();
+    if (pitot_ok) {
+        s.airspeed_mps = pitot_airspeed_mps;
+        s.airspeed_valid = true;
+    } else {
+        // Keep sensor module as fallback smoothing path where raw differential pressure is available.
+        const AirspeedEstimate air = airspeed_sensor_.update(dt_s, 0.0f);
+        s.airspeed_mps = air.airspeed_mps;
+        s.airspeed_valid = air.valid;
+    }
 
     s.imu_valid = hal_->isIMUHealthy();
     s.attitude_valid = true;

@@ -56,6 +56,10 @@ public:
     bool readRadio(float* channels, int num_channels) override;
     bool isRadioConnected() override;
 
+    bool initAirspeed() override;
+    bool readAirspeed(float* airspeed_mps) override;
+    bool isAirspeedHealthy() override;
+
     bool initServos() override;
     void writeServo(int channel, float position_0_to_1) override;
 
@@ -76,11 +80,13 @@ private:
 
     bool imu_initialized_{false};
     bool radio_initialized_{false};
+    bool airspeed_initialized_{false};
     bool servos_initialized_{false};
     bool motors_initialized_{false};
 
     std::array<float, 8> radio_channels_{};
     std::array<float, 8> servo_outputs_{};
+    float airspeed_mps_{0.0f};
     std::array<float, 4> motor_outputs_{};
 
     bool status_led_{false};

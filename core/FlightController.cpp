@@ -98,7 +98,7 @@ bool FlightController::initialize() {
         return false;
     }
 
-    if (!hal_->initIMU() || !hal_->initRadio() || !hal_->initServos() || !hal_->initMotors()) {
+    if (!hal_->initIMU() || !hal_->initRadio() || !hal_->initAirspeed() || !hal_->initServos() || !hal_->initMotors()) {
         status_ = Status::SYSTEM_ERROR;
         return false;
     }
@@ -135,7 +135,6 @@ void FlightController::update() {
     updateSafetyMonitoring();
     updatePerformanceStats();
     outputDebugInfo();
-    ++performance_stats_.loop_count;
 }
 
 AircraftState FlightController::getAircraftState() const {
@@ -242,6 +241,12 @@ bool FlightController::updateStateEstimation() {
     state_estimator_.setThrottleCommand(radio_inputs_.throttle);
     state_estimator_.update(loop_dt_);
     aircraft_state_ = state_estimator_.getState();
+
+    float measured_airspeed = 0.0f;
+    if (config_.use_pitot_airspeed_primary && readMeasuredAirspeed(measured_airspeed)) {
+        aircraft_state_.airspeed = measured_airspeed;
+    }
+
     return true;
 }
 
@@ -348,9 +353,11 @@ bool FlightController::checkSystemHealth() {
         return false;
     }
 
-    if (!state_estimator_.getAirspeedState().converged) {
+    float measured_airspeed = 0.0f;
+    const bool pitot_ok = readMeasuredAirspeed(measured_airspeed);
+    if (!pitot_ok && !state_estimator_.getAirspeedState().converged) {
         if (hal_) {
-            hal_->serialPrintln("HEALTH: Airspeed estimator not converged");
+            hal_->serialPrintln("HEALTH: No valid airspeed source (pitot/estimator)");
         }
         return false;
     }
@@ -436,7 +443,8 @@ bool FlightController::shouldEnableLearning(const SafetyGovernor::Result& govern
 
     const bool estimator_ok = hal_->isIMUHealthy();
     const bool airspeed_valid = std::isfinite(aircraft_state_.airspeed) != 0 && aircraft_state_.airspeed > 1.0f;
-    const bool airspeed_converged = state_estimator_.getAirspeedState().converged;
+    float measured_airspeed = 0.0f;
+    const bool airspeed_converged = readMeasuredAirspeed(measured_airspeed) || state_estimator_.getAirspeedState().converged;
     const bool near_stall = aircraft_state_.airspeed < adaptive_cfg.near_stall_airspeed;
     const bool surface_saturated = governor_result.adaptive_saturated || governor_result.total_saturated;
     const bool recent_mode_change =
@@ -551,6 +559,20 @@ float FlightController::readBatteryVoltage() const {
     return 11.1f;
 }
 
+bool FlightController::readMeasuredAirspeed(float& airspeed_mps) const {
+    airspeed_mps = 0.0f;
+    if (hal_ == nullptr) {
+        return false;
+    }
+    if (!hal_->isAirspeedHealthy()) {
+        return false;
+    }
+    if (!hal_->readAirspeed(&airspeed_mps)) {
+        return false;
+    }
+    return std::isfinite(airspeed_mps) != 0 && airspeed_mps > 0.5f;
+}
+
 bool FlightController::loadConfiguration(const void* data, std::size_t size) {
     struct PackedConfig {
         std::uint32_t loop_frequency_hz;
@@ -560,6 +582,7 @@ bool FlightController::loadConfiguration(const void* data, std::size_t size) {
         float low_battery_voltage;
         float max_loop_time_ms;
         std::uint32_t enable_loop_timing_monitoring;
+        std::uint32_t use_pitot_airspeed_primary;
         std::uint32_t enable_debug_output;
         std::uint32_t debug_output_rate_hz;
     };
@@ -578,6 +601,7 @@ bool FlightController::loadConfiguration(const void* data, std::size_t size) {
     config_.low_battery_voltage = packed.low_battery_voltage;
     config_.max_loop_time_ms = packed.max_loop_time_ms;
     config_.enable_loop_timing_monitoring = packed.enable_loop_timing_monitoring != 0;
+    config_.use_pitot_airspeed_primary = packed.use_pitot_airspeed_primary != 0;
     config_.enable_debug_output = packed.enable_debug_output != 0;
     config_.debug_output_rate_hz = packed.debug_output_rate_hz;
 
@@ -593,6 +617,7 @@ bool FlightController::saveConfiguration(void* data, std::size_t* size) const {
         float low_battery_voltage;
         float max_loop_time_ms;
         std::uint32_t enable_loop_timing_monitoring;
+        std::uint32_t use_pitot_airspeed_primary;
         std::uint32_t enable_debug_output;
         std::uint32_t debug_output_rate_hz;
     };
@@ -614,6 +639,7 @@ bool FlightController::saveConfiguration(void* data, std::size_t* size) const {
     packed.low_battery_voltage = config_.low_battery_voltage;
     packed.max_loop_time_ms = config_.max_loop_time_ms;
     packed.enable_loop_timing_monitoring = config_.enable_loop_timing_monitoring ? 1u : 0u;
+    packed.use_pitot_airspeed_primary = config_.use_pitot_airspeed_primary ? 1u : 0u;
     packed.enable_debug_output = config_.enable_debug_output ? 1u : 0u;
     packed.debug_output_rate_hz = config_.debug_output_rate_hz;
 

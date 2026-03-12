@@ -1,6 +1,7 @@
 #pragma once
 #include "HAL.h"
 #include <cstring>
+#include <cstdint>
 
 // Platform-specific networking includes
 #ifdef _WIN32
@@ -70,6 +71,11 @@ public:
     bool readRadio(float* channels, int num_channels) override;
     bool isRadioConnected() override;
     
+    // Airspeed Interface (simulated pitot / derived)
+    bool initAirspeed() override;
+    bool readAirspeed(float* airspeed_mps) override;
+    bool isAirspeedHealthy() override;
+
     // Servo Interface (outputs to FlightGear)
     bool initServos() override;
     void writeServo(int channel, float position_0_to_1) override;
@@ -119,7 +125,11 @@ private:
     bool radio_initialized_;
     bool servos_initialized_;
     bool motors_initialized_;
+    bool airspeed_initialized_;
     bool networking_initialized_;
+
+    float simulated_airspeed_mps_;
+    uint32_t last_airspeed_update_ms_;
     
     // Helper methods
     void updateSystemTime();

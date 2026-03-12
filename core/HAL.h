@@ -33,6 +33,11 @@ public:
     virtual bool readRadio(float* channels, int num_channels) = 0;
     virtual bool isRadioConnected() = 0;
     
+    // Airspeed Interface (pitot / differential pressure derived true airspeed)
+    virtual bool initAirspeed() = 0;
+    virtual bool readAirspeed(float* airspeed_mps) = 0;
+    virtual bool isAirspeedHealthy() = 0;
+
     // Servo Interface (for control surfaces)
     virtual bool initServos() = 0;
     virtual void writeServo(int channel, float position_0_to_1) = 0;  // 0.0 = 0°, 1.0 = 180°

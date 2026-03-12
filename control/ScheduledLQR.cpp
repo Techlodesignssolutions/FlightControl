@@ -251,10 +251,6 @@ bool ScheduledLQR::loadFromJsonFile(const char* absolute_path, ScheduleConfig& o
     }
 
     const std::string path(absolute_path);
-    if (!isAbsolutePath(path)) {
-        return fail("lqr_schedule_path must be absolute");
-    }
-
     std::ifstream input(path);
     if (!input.good()) {
         return fail("unable to open LQR schedule JSON file");

@@ -13,6 +13,7 @@ FlightGearHAL::FlightGearHAL(const HardwareConfig& config)
     , radio_initialized_(false)
     , servos_initialized_(false)
     , motors_initialized_(false)
+    , airspeed_initialized_(false)
     , networking_initialized_(false)
 {
     // Initialize Windows networking if needed
@@ -49,6 +50,8 @@ FlightGearHAL::FlightGearHAL(const HardwareConfig& config)
     
     last_fg_update_ = 0;
     last_radio_update_ = 0;
+    simulated_airspeed_mps_ = 0.0f;
+    last_airspeed_update_ms_ = 0;
 }
 
 FlightGearHAL::~FlightGearHAL() {
@@ -118,6 +121,9 @@ void FlightGearHAL::setFlightGearData(const FlightGearData& data) {
     fg_data_ = data;
     fg_data_valid_ = true;
     last_fg_update_ = millis();
+
+    // Placeholder synthetic airspeed feed until a dedicated FlightGear pitot mapping is wired.
+    simulated_airspeed_mps_ = std::max(5.0f, control_outputs_.throttle * 30.0f);
 }
 
 void FlightGearHAL::setRadioInputs(float aileron, float elevator, float rudder, float throttle) {
@@ -221,6 +227,29 @@ bool FlightGearHAL::readRadio(float* channels, int num_channels) {
 
 bool FlightGearHAL::isRadioConnected() {
     return radio_connected_ && (millis() - last_radio_update_ < 1000);
+}
+
+
+//=== Airspeed Interface ===
+bool FlightGearHAL::initAirspeed() {
+    airspeed_initialized_ = true;
+    return true;
+}
+
+bool FlightGearHAL::readAirspeed(float* airspeed_mps) {
+    if (!airspeed_initialized_ || airspeed_mps == nullptr) {
+        return false;
+    }
+
+    // FlightGear bridge currently does not expose differential pressure directly.
+    // Keep this as a stubbed true-airspeed channel for scheduling integration tests.
+    *airspeed_mps = simulated_airspeed_mps_;
+    last_airspeed_update_ms_ = millis();
+    return true;
+}
+
+bool FlightGearHAL::isAirspeedHealthy() {
+    return airspeed_initialized_ && (millis() - last_airspeed_update_ms_ < 1000);
 }
 
 //=== Servo Interface ===

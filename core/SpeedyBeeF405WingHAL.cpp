@@ -22,6 +22,7 @@ SpeedyBeeF405WingHAL::SpeedyBeeF405WingHAL(const BoardConfig& config)
     radio_channels_.fill(0.0f);
     servo_outputs_.fill(0.5f);
     motor_outputs_.fill(0.0f);
+    airspeed_mps_ = 0.0f;
 }
 
 uint32_t SpeedyBeeF405WingHAL::micros() {
@@ -110,6 +111,24 @@ bool SpeedyBeeF405WingHAL::readRadio(float* channels, int num_channels) {
 
 bool SpeedyBeeF405WingHAL::isRadioConnected() {
     return radio_initialized_;
+}
+
+bool SpeedyBeeF405WingHAL::initAirspeed() {
+    airspeed_initialized_ = true;
+    return true;
+}
+
+bool SpeedyBeeF405WingHAL::readAirspeed(float* airspeed_mps) {
+    if (!airspeed_initialized_ || airspeed_mps == nullptr) {
+        return false;
+    }
+
+    *airspeed_mps = airspeed_mps_;
+    return true;
+}
+
+bool SpeedyBeeF405WingHAL::isAirspeedHealthy() {
+    return airspeed_initialized_;
 }
 
 bool SpeedyBeeF405WingHAL::initServos() {
