@@ -4,9 +4,10 @@ struct ImuSample {
     float gx_rad_s = 0.0f;
     float gy_rad_s = 0.0f;
     float gz_rad_s = 0.0f;
-    float roll_rad = 0.0f;
-    float pitch_rad = 0.0f;
-    float yaw_rad = 0.0f;
+
+    float ax_m_s2 = 0.0f;
+    float ay_m_s2 = 0.0f;
+    float az_m_s2 = 9.80665f;
 };
 
 class ImuDriver {

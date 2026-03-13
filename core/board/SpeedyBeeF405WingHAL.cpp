@@ -7,7 +7,10 @@
 namespace {
 using Clock = std::chrono::steady_clock;
 const Clock::time_point kStart = Clock::now();
-}
+
+constexpr float kGravity = 9.80665f;
+
+}  // namespace
 
 SpeedyBeeF405WingHAL::SpeedyBeeF405WingHAL()
     : SpeedyBeeF405WingHAL(BoardConfig{}) {
@@ -31,6 +34,7 @@ bool SpeedyBeeF405WingHAL::init() {
     airspeed_filter_initialized_ = false;
     climb_filter_initialized_ = false;
     altitude_initialized_ = false;
+    attitude_initialized_ = false;
     last_sensor_time_us_ = microsNow();
     return ok;
 }
@@ -114,7 +118,6 @@ bool SpeedyBeeF405WingHAL::writeActuators(const ActuatorCommand& cmd) {
     ok = ok && writePwmMicros(config_.pwm_rudder, rudder_us);
     ok = ok && writePwmMicros(config_.pwm_throttle, throttle_us);
 
-    // Keep mirror cache for bench visibility.
     pwm_output_us_[config_.pwm_left_elevon] = left_us;
     pwm_output_us_[config_.pwm_right_elevon] = right_us;
     pwm_output_us_[config_.pwm_rudder] = rudder_us;
@@ -136,18 +139,22 @@ bool SpeedyBeeF405WingHAL::initBaro() {
 }
 
 bool SpeedyBeeF405WingHAL::initPitot() {
-    return pitot_driver_.init();
+    const PitotDriver::Source src =
+        (config_.pitot_source == PitotSource::DigitalI2C) ? PitotDriver::Source::DigitalI2C : PitotDriver::Source::AnalogAir;
+    return pitot_driver_.init(src);
 }
 
 bool SpeedyBeeF405WingHAL::initReceiver() {
-    return receiver_driver_.init();
+    const ReceiverDriver::Protocol p =
+        (config_.receiver_protocol == ReceiverProtocol::CRSF) ? ReceiverDriver::Protocol::CRSF : ReceiverDriver::Protocol::SBUS;
+    return receiver_driver_.init(p);
 }
 
 bool SpeedyBeeF405WingHAL::initPwm() {
     return pwm_driver_.init();
 }
 
-bool SpeedyBeeF405WingHAL::readImuAndAttitude(SensorFrame& frame, float) {
+bool SpeedyBeeF405WingHAL::readImuAndAttitude(SensorFrame& frame, float dt_s) {
     ImuSample raw{};
     if (!imu_driver_.read(raw)) {
         return false;
@@ -158,7 +165,7 @@ bool SpeedyBeeF405WingHAL::readImuAndAttitude(SensorFrame& frame, float) {
     const float sign_yaw = config_.invert_yaw_axis ? -1.0f : 1.0f;
 
     const float g[3] = {raw.gx_rad_s, raw.gy_rad_s, raw.gz_rad_s};
-    const float a[3] = {raw.roll_rad, raw.pitch_rad, raw.yaw_rad};
+    const float a[3] = {raw.ax_m_s2, raw.ay_m_s2, raw.az_m_s2};
 
     const int roll_i = std::max(0, std::min(2, config_.imu_roll_axis));
     const int pitch_i = std::max(0, std::min(2, config_.imu_pitch_axis));
@@ -168,9 +175,28 @@ bool SpeedyBeeF405WingHAL::readImuAndAttitude(SensorFrame& frame, float) {
     frame.q_rad_s = sign_pitch * g[pitch_i];
     frame.r_rad_s = sign_yaw * g[yaw_i];
 
-    frame.roll_rad = sign_roll * a[roll_i];
-    frame.pitch_rad = sign_pitch * a[pitch_i];
-    frame.yaw_rad = sign_yaw * a[yaw_i];
+    const float ax = sign_roll * a[roll_i];
+    const float ay = sign_pitch * a[pitch_i];
+    const float az = sign_yaw * a[yaw_i];
+
+    const float roll_acc = std::atan2(ay, az);
+    const float pitch_acc = std::atan2(-ax, std::sqrt(ay * ay + az * az));
+
+    if (!attitude_initialized_ || dt_s <= 0.0f) {
+        ahrs_roll_rad_ = roll_acc;
+        ahrs_pitch_rad_ = pitch_acc;
+        ahrs_yaw_rad_ = 0.0f;
+        attitude_initialized_ = true;
+    } else {
+        const float alpha = clamp(config_.attitude_complementary_alpha, 0.0f, 1.0f);
+        ahrs_roll_rad_ = alpha * (ahrs_roll_rad_ + frame.p_rad_s * dt_s) + (1.0f - alpha) * roll_acc;
+        ahrs_pitch_rad_ = alpha * (ahrs_pitch_rad_ + frame.q_rad_s * dt_s) + (1.0f - alpha) * pitch_acc;
+        ahrs_yaw_rad_ += frame.r_rad_s * dt_s;
+    }
+
+    frame.roll_rad = ahrs_roll_rad_;
+    frame.pitch_rad = ahrs_pitch_rad_;
+    frame.yaw_rad = ahrs_yaw_rad_;
     return true;
 }
 
@@ -234,9 +260,9 @@ void SpeedyBeeF405WingHAL::setSensorFrame(const SensorFrame& frame) {
     imu.gx_rad_s = frame.p_rad_s;
     imu.gy_rad_s = frame.q_rad_s;
     imu.gz_rad_s = frame.r_rad_s;
-    imu.roll_rad = frame.roll_rad;
-    imu.pitch_rad = frame.pitch_rad;
-    imu.yaw_rad = frame.yaw_rad;
+    imu.ax_m_s2 = 0.0f;
+    imu.ay_m_s2 = std::sin(frame.roll_rad) * kGravity;
+    imu.az_m_s2 = std::cos(frame.roll_rad) * kGravity;
     imu_driver_.setSample(imu);
 
     baro_driver_.setAltitudeMeters(frame.altitude_m);

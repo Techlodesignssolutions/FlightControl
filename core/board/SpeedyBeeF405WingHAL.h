@@ -17,19 +17,31 @@ public:
         BenchInjected
     };
 
+    enum class ReceiverProtocol {
+        CRSF,
+        SBUS
+    };
+
+    enum class PitotSource {
+        DigitalI2C,
+        AnalogAir
+    };
+
     struct BoardConfig {
         std::uint32_t serial_baud = 115200;
         HalMode mode = HalMode::RealHardware;
+        ReceiverProtocol receiver_protocol = ReceiverProtocol::CRSF;
+        PitotSource pitot_source = PitotSource::DigitalI2C;
 
         int rc_roll_channel = 0;
         int rc_pitch_channel = 1;
         int rc_yaw_channel = 2;
         int rc_throttle_channel = 3;
 
-        int pwm_left_elevon = 0;
-        int pwm_right_elevon = 1;
-        int pwm_rudder = 2;
-        int pwm_throttle = 3;
+        int pwm_left_elevon = 0;   // S1
+        int pwm_right_elevon = 1;  // S2
+        int pwm_rudder = 2;        // S3
+        int pwm_throttle = 3;      // S4
 
         float servo_neutral_us = 1500.0f;
         float servo_min_us = 1000.0f;
@@ -59,6 +71,8 @@ public:
 
         float airspeed_lpf_alpha = 0.15f;
         float climb_rate_lpf_alpha = 0.2f;
+
+        float attitude_complementary_alpha = 0.98f;
     };
 
     struct SensorFrame {
@@ -113,6 +127,12 @@ private:
     unsigned long last_sensor_time_us_{0};
     bool altitude_initialized_{false};
     float last_altitude_m_{0.0f};
+
+    // Internal AHRS/complementary state.
+    bool attitude_initialized_{false};
+    float ahrs_roll_rad_{0.0f};
+    float ahrs_pitch_rad_{0.0f};
+    float ahrs_yaw_rad_{0.0f};
 
     SensorFrame sensor_frame_{};
     std::array<float, 8> rc_channels_{};

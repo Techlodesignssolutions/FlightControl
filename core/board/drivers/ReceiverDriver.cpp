@@ -1,6 +1,7 @@
 #include "ReceiverDriver.h"
 
-bool ReceiverDriver::init() {
+bool ReceiverDriver::init(Protocol protocol) {
+    protocol_ = protocol;
     initialized_ = true;
     return true;
 }

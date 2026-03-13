@@ -1,6 +1,7 @@
 #include "PitotDriver.h"
 
-bool PitotDriver::init() {
+bool PitotDriver::init(Source source) {
+    source_ = source;
     initialized_ = true;
     return true;
 }
