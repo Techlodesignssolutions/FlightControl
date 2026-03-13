@@ -51,99 +51,41 @@ bool Stm32f4Platform::writePwmMicros(int logical_channel, float pulse_us) const 
 }
 
 #if defined(UNIT_TEST) || defined(BENCH_HARNESS)
+#include "BenchBackend.h"
+
 namespace {
-class StubBackend final : public Stm32f4Platform::Backend {
-public:
-    bool initSpiBus(int) override { return true; }
-    bool initI2cBus(int) override { return true; }
-    bool initUart(int, bool) override { return true; }
-    bool initAdcChannel(int, int) override { return true; }
-    bool initPwmTimerChannel(int, int) override { return true; }
+BenchBackend g_bench_backend{};
 
-    bool readImuRaw(Stm32f4Platform::ImuRaw& out) override {
-        out = imu_raw_;
-        return true;
-    }
-
-    bool readBaroAltitudeMeters(float& altitude_m) override {
-        altitude_m = baro_altitude_m_;
-        return true;
-    }
-
-    bool readPitotDifferentialPressurePa(float& dp_pa) override {
-        dp_pa = pitot_dp_pa_;
-        return true;
-    }
-
-    bool readReceiverPulsesUs(std::array<int, 8>& out) override {
-        out = receiver_pulses_us_;
-        return true;
-    }
-
-    bool writePwmMicros(int logical_channel, float pulse_us) override {
-        if (logical_channel < 0 || logical_channel >= static_cast<int>(pwm_pulses_us_.size())) {
-            return false;
-        }
-        pwm_pulses_us_[static_cast<std::size_t>(logical_channel)] = pulse_us;
-        return true;
-    }
-
-    void setImuRaw(const Stm32f4Platform::ImuRaw& raw) {
-        imu_raw_ = raw;
-    }
-
-    void setBaroAltitudeMeters(float altitude_m) {
-        baro_altitude_m_ = altitude_m;
-    }
-
-    void setPitotDifferentialPressurePa(float dp_pa) {
-        pitot_dp_pa_ = dp_pa;
-    }
-
-    void setReceiverPulsesUs(const std::array<int, 8>& pulses) {
-        receiver_pulses_us_ = pulses;
-    }
-
-private:
-    Stm32f4Platform::ImuRaw imu_raw_{};
-    float baro_altitude_m_{0.0f};
-    float pitot_dp_pa_{0.0f};
-    std::array<int, 8> receiver_pulses_us_{{1500, 1500, 1500, 1000, 1500, 1500, 1500, 1500}};
-    std::array<float, 8> pwm_pulses_us_{{1500, 1500, 1500, 1000, 1500, 1500, 1500, 1500}};
-};
-
-StubBackend g_stub_backend{};
-
-StubBackend* ensureStubBackend() {
+BenchBackend* ensureBenchBackend() {
     if (Stm32f4Platform::backend() == nullptr) {
-        Stm32f4Platform::installBackend(&g_stub_backend);
-        return &g_stub_backend;
+        Stm32f4Platform::installBackend(&g_bench_backend);
+        return &g_bench_backend;
     }
-    return dynamic_cast<StubBackend*>(Stm32f4Platform::backend());
+    return dynamic_cast<BenchBackend*>(Stm32f4Platform::backend());
 }
 }  // namespace
 
 void Stm32f4Platform::injectImuRaw(const ImuRaw& raw) const {
-    if (StubBackend* stub = ensureStubBackend()) {
-        stub->setImuRaw(raw);
+    if (BenchBackend* bench = ensureBenchBackend()) {
+        bench->setImuRaw(raw);
     }
 }
 
 void Stm32f4Platform::injectBaroAltitudeMeters(float altitude_m) const {
-    if (StubBackend* stub = ensureStubBackend()) {
-        stub->setBaroAltitudeMeters(altitude_m);
+    if (BenchBackend* bench = ensureBenchBackend()) {
+        bench->setBaroAltitudeMeters(altitude_m);
     }
 }
 
 void Stm32f4Platform::injectPitotDifferentialPressurePa(float dp_pa) const {
-    if (StubBackend* stub = ensureStubBackend()) {
-        stub->setPitotDifferentialPressurePa(dp_pa);
+    if (BenchBackend* bench = ensureBenchBackend()) {
+        bench->setPitotDifferentialPressurePa(dp_pa);
     }
 }
 
 void Stm32f4Platform::injectReceiverPulsesUs(const std::array<int, 8>& pulses) const {
-    if (StubBackend* stub = ensureStubBackend()) {
-        stub->setReceiverPulsesUs(pulses);
+    if (BenchBackend* bench = ensureBenchBackend()) {
+        bench->setReceiverPulsesUs(pulses);
     }
 }
 #endif
