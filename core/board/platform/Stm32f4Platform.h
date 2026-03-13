@@ -13,6 +13,23 @@ public:
         float az_m_s2 = 9.80665f;
     };
 
+    class Backend {
+    public:
+        virtual ~Backend() = default;
+
+        virtual bool initSpiBus(int bus_id) = 0;
+        virtual bool initI2cBus(int bus_id) = 0;
+        virtual bool initUart(int uart_id, bool inverted_rx) = 0;
+        virtual bool initAdcChannel(int adc_id, int channel) = 0;
+        virtual bool initPwmTimerChannel(int timer_id, int channel) = 0;
+
+        virtual bool readImuRaw(ImuRaw& out) = 0;
+        virtual bool readBaroAltitudeMeters(float& altitude_m) = 0;
+        virtual bool readPitotDifferentialPressurePa(float& dp_pa) = 0;
+        virtual bool readReceiverPulsesUs(std::array<int, 8>& out) = 0;
+        virtual bool writePwmMicros(int logical_channel, float pulse_us) = 0;
+    };
+
     bool initSpiBus(int bus_id) const;
     bool initI2cBus(int bus_id) const;
     bool initUart(int uart_id, bool inverted_rx) const;
@@ -25,6 +42,9 @@ public:
     bool readReceiverPulsesUs(std::array<int, 8>& out) const;
     bool writePwmMicros(int logical_channel, float pulse_us) const;
 
+    static void installBackend(Backend* backend);
+    static Backend* backend();
+
 #if defined(UNIT_TEST) || defined(BENCH_HARNESS)
     void injectImuRaw(const ImuRaw& raw) const;
     void injectBaroAltitudeMeters(float altitude_m) const;
@@ -33,7 +53,10 @@ public:
 #endif
 
 private:
-    // Shared stub transport state until real STM32 HAL/LL backend is wired.
+    // Optional real backend. In production builds, no backend means platform init/read/write fails.
+    static Backend* backend_;
+
+    // Bench stub transport state.
     static ImuRaw imu_raw_;
     static float baro_altitude_m_;
     static float pitot_dp_pa_;
