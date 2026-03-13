@@ -13,12 +13,11 @@ bool BaroDriver::readAltitudeMeters(float& altitude_m) const {
     if (!initialized_) {
         return false;
     }
-    altitude_m = altitude_m_;
-    return true;
+    return platform_.readBaroAltitudeMeters(altitude_m);
 }
 
 #if defined(UNIT_TEST) || defined(BENCH_HARNESS)
 void BaroDriver::setAltitudeMeters(float altitude_m) {
-    altitude_m_ = altitude_m;
+    platform_.injectBaroAltitudeMeters(altitude_m);
 }
 #endif

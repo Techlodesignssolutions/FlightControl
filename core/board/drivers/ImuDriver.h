@@ -23,6 +23,5 @@ public:
 
 private:
     Stm32f4Platform platform_{};
-    ImuSample sample_{};
     bool initialized_{false};
 };

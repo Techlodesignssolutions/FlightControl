@@ -19,6 +19,5 @@ public:
 private:
     Stm32f4Platform platform_{};
     Source source_{Source::DigitalI2C};
-    float dp_pa_{0.0f};
     bool initialized_{false};
 };

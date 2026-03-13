@@ -19,12 +19,11 @@ bool PitotDriver::readDifferentialPressurePa(float& dp_pa) const {
     if (!initialized_) {
         return false;
     }
-    dp_pa = dp_pa_;
-    return true;
+    return platform_.readPitotDifferentialPressurePa(dp_pa);
 }
 
 #if defined(UNIT_TEST) || defined(BENCH_HARNESS)
 void PitotDriver::setDifferentialPressurePa(float dp_pa) {
-    dp_pa_ = dp_pa;
+    platform_.injectPitotDifferentialPressurePa(dp_pa);
 }
 #endif

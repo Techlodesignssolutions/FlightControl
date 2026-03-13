@@ -18,12 +18,11 @@ bool ReceiverDriver::readPulsesUs(std::array<int, 8>& pulses_us) const {
     if (!initialized_) {
         return false;
     }
-    pulses_us = pulses_us_;
-    return true;
+    return platform_.readReceiverPulsesUs(pulses_us);
 }
 
 #if defined(UNIT_TEST) || defined(BENCH_HARNESS)
 void ReceiverDriver::setPulsesUs(const std::array<int, 8>& pulses_us) {
-    pulses_us_ = pulses_us;
+    platform_.injectReceiverPulsesUs(pulses_us);
 }
 #endif

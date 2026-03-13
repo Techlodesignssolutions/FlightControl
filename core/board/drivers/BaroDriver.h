@@ -13,6 +13,5 @@ public:
 
 private:
     Stm32f4Platform platform_{};
-    float altitude_m_{0.0f};
     bool initialized_{false};
 };

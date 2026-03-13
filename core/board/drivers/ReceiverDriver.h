@@ -21,6 +21,5 @@ public:
 private:
     Stm32f4Platform platform_{};
     Protocol protocol_{Protocol::CRSF};
-    std::array<int, 8> pulses_us_{{1500,1500,1500,1000,1500,1500,1500,1500}};
     bool initialized_{false};
 };
