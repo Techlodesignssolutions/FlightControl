@@ -18,6 +18,14 @@ extern "C" bool __attribute__((weak)) speedybee_hw_init_pwm(int timer_id, int ch
     return false;
 }
 
+extern "C" bool __attribute__((weak)) speedybee_hw_configure_imu() { return false; }
+extern "C" bool __attribute__((weak)) speedybee_hw_configure_baro() { return false; }
+extern "C" bool __attribute__((weak)) speedybee_hw_configure_pitot() { return false; }
+extern "C" bool __attribute__((weak)) speedybee_hw_configure_receiver(int mode) {
+    (void)mode;
+    return false;
+}
+
 extern "C" bool __attribute__((weak)) speedybee_hw_read_imu(float* gx,
                                                               float* gy,
                                                               float* gz,
@@ -51,6 +59,9 @@ extern "C" bool __attribute__((weak)) speedybee_hw_write_pwm_us(int logical_chan
     (void)pulse_us;
     return false;
 }
+
+constexpr int kReceiverModeCrsf = 1;
+constexpr int kReceiverModeSbus = 2;
 
 constexpr std::array<int, 4> kPwmTimers{{
     speedybee_f405_wing::PWM0_TIMER,
@@ -107,6 +118,7 @@ bool SpeedyBeeF405WingBackend::initUart(int uart_id, bool inverted_rx) {
         uart1_ready_ = speedybee_hw_init_uart1();
         if (uart1_ready_) {
             rx_mode_ = ReceiverMode::CRSF;
+            receiver_configured_ = false;
         }
         return uart1_ready_;
     }
@@ -117,6 +129,7 @@ bool SpeedyBeeF405WingBackend::initUart(int uart_id, bool inverted_rx) {
         uart2_ready_ = speedybee_hw_init_uart2_sbus_inverted();
         if (uart2_ready_) {
             rx_mode_ = ReceiverMode::SBUS;
+            receiver_configured_ = false;
         }
         return uart2_ready_;
     }
@@ -153,6 +166,9 @@ bool SpeedyBeeF405WingBackend::readImuRaw(Stm32f4Platform::ImuRaw& out) {
         return false;
     }
     if (!imu_configured_) {
+        if (!speedybee_hw_configure_imu()) {
+            return false;
+        }
         imu_configured_ = true;
     }
 
@@ -180,6 +196,9 @@ bool SpeedyBeeF405WingBackend::readBaroAltitudeMeters(float& altitude_m) {
         return false;
     }
     if (!baro_configured_) {
+        if (!speedybee_hw_configure_baro()) {
+            return false;
+        }
         baro_configured_ = true;
     }
     return speedybee_hw_read_baro_altitude(&altitude_m);
@@ -187,10 +206,13 @@ bool SpeedyBeeF405WingBackend::readBaroAltitudeMeters(float& altitude_m) {
 
 bool SpeedyBeeF405WingBackend::readPitotDifferentialPressurePa(float& dp_pa) {
     if (!pitot_configured_) {
-        pitot_configured_ = i2c1_ready_ || adc1_ch15_ready_;
-    }
-    if (!pitot_configured_) {
-        return false;
+        if (!(i2c1_ready_ || adc1_ch15_ready_)) {
+            return false;
+        }
+        if (!speedybee_hw_configure_pitot()) {
+            return false;
+        }
+        pitot_configured_ = true;
     }
     return speedybee_hw_read_pitot_dp_pa(&dp_pa);
 }
@@ -202,8 +224,15 @@ bool SpeedyBeeF405WingBackend::readReceiverPulsesUs(std::array<int, 8>& out) {
         return false;
     }
 
+    const int mode = (rx_mode_ == ReceiverMode::CRSF) ? kReceiverModeCrsf : kReceiverModeSbus;
+    if (!receiver_configured_) {
+        if (!speedybee_hw_configure_receiver(mode)) {
+            return false;
+        }
+        receiver_configured_ = true;
+    }
+
     std::array<int, 8> pulses{};
-    const int mode = (rx_mode_ == ReceiverMode::CRSF) ? 1 : 2;
     if (!speedybee_hw_read_receiver_us(pulses.data(), pulses.size(), mode)) {
         return false;
     }

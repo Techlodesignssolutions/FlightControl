@@ -39,6 +39,7 @@ private:
     bool imu_configured_{false};
     bool baro_configured_{false};
     bool pitot_configured_{false};
+    bool receiver_configured_{false};
 
     ReceiverMode rx_mode_{ReceiverMode::None};
 };
