@@ -3,6 +3,8 @@
 #include "Stm32f4Platform.h"
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 
 class SpeedyBeeF405WingBackend final : public Stm32f4Platform::Backend {
 public:
@@ -42,4 +44,8 @@ private:
     bool receiver_configured_{false};
 
     ReceiverMode rx_mode_{ReceiverMode::None};
+    std::array<int, 8> last_receiver_us_{{1500, 1500, 1500, 1000, 1500, 1500, 1500, 1500}};
+
+    std::array<std::uint8_t, 128> rx_stream_buffer_{};
+    std::size_t rx_stream_size_{0};
 };
