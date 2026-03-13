@@ -53,13 +53,6 @@ public:
 #endif
 
 private:
-    // Optional real backend. In production builds, no backend means platform init/read/write fails.
+    // Optional real backend. If absent, all transport APIs fail in runtime builds.
     static Backend* backend_;
-
-    // Bench stub transport state.
-    static ImuRaw imu_raw_;
-    static float baro_altitude_m_;
-    static float pitot_dp_pa_;
-    static std::array<int, 8> receiver_pulses_us_;
-    static std::array<float, 8> pwm_pulses_us_;
 };
