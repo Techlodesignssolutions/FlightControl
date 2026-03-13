@@ -3,75 +3,12 @@
 #include "SpeedyBeeF405WingPins.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 
 namespace {
 using Clock = std::chrono::steady_clock;
 const Clock::time_point kStart = Clock::now();
-
-// Low-level board hooks. Firmware can override these with real STM32 HAL/LL implementations.
-extern "C" bool __attribute__((weak)) speedybee_hw_init_spi1() { return false; }
-extern "C" bool __attribute__((weak)) speedybee_hw_init_i2c1() { return false; }
-extern "C" bool __attribute__((weak)) speedybee_hw_init_uart1() { return false; }
-extern "C" bool __attribute__((weak)) speedybee_hw_init_uart2_sbus_inverted() { return false; }
-extern "C" bool __attribute__((weak)) speedybee_hw_init_adc1_ch15() { return false; }
-extern "C" bool __attribute__((weak)) speedybee_hw_init_pwm(int timer_id, int channel) {
-    (void)timer_id;
-    (void)channel;
-    return false;
-}
-
-extern "C" bool __attribute__((weak)) speedybee_hw_probe_imu(std::uint8_t* who_am_i) {
-    (void)who_am_i;
-    return false;
-}
-extern "C" bool __attribute__((weak)) speedybee_hw_probe_baro(std::uint8_t i2c_addr) {
-    (void)i2c_addr;
-    return false;
-}
-extern "C" bool __attribute__((weak)) speedybee_hw_probe_pitot() { return false; }
-
-extern "C" bool __attribute__((weak)) speedybee_hw_configure_imu() { return false; }
-extern "C" bool __attribute__((weak)) speedybee_hw_configure_baro() { return false; }
-extern "C" bool __attribute__((weak)) speedybee_hw_configure_pitot() { return false; }
-extern "C" bool __attribute__((weak)) speedybee_hw_configure_receiver(int mode) {
-    (void)mode;
-    return false;
-}
-
-extern "C" bool __attribute__((weak)) speedybee_hw_read_imu(float* gx,
-                                                              float* gy,
-                                                              float* gz,
-                                                              float* ax,
-                                                              float* ay,
-                                                              float* az) {
-    (void)gx;
-    (void)gy;
-    (void)gz;
-    (void)ax;
-    (void)ay;
-    (void)az;
-    return false;
-}
-extern "C" bool __attribute__((weak)) speedybee_hw_read_baro_altitude(float* altitude_m) {
-    (void)altitude_m;
-    return false;
-}
-extern "C" bool __attribute__((weak)) speedybee_hw_read_pitot_dp_pa(float* dp_pa) {
-    (void)dp_pa;
-    return false;
-}
-extern "C" int __attribute__((weak)) speedybee_hw_read_uart_bytes(int uart_id, std::uint8_t* out, std::size_t max_len) {
-    (void)uart_id;
-    (void)out;
-    (void)max_len;
-    return 0;
-}
-extern "C" bool __attribute__((weak)) speedybee_hw_write_pwm_us(int logical_channel, float pulse_us) {
-    (void)logical_channel;
-    (void)pulse_us;
-    return false;
-}
 
 constexpr int kReceiverModeCrsf = 1;
 constexpr int kReceiverModeSbus = 2;
@@ -89,6 +26,23 @@ constexpr std::array<int, 4> kPwmChannels{{
     speedybee_f405_wing::PWM2_TIM_CHANNEL,
     speedybee_f405_wing::PWM3_TIM_CHANNEL,
 }};
+
+// ICM-42688-P assumptions.
+constexpr std::uint8_t kImuWhoAmIReg = 0x75;
+constexpr std::uint8_t kImuWhoAmIExpected = 0x47;
+constexpr std::uint8_t kImuPwrMgmt0 = 0x4E;
+constexpr std::uint8_t kImuGyroConfig0 = 0x4F;
+constexpr std::uint8_t kImuAccelConfig0 = 0x50;
+constexpr std::uint8_t kImuAccelDataX1 = 0x1F;
+
+// SPL06 assumptions.
+constexpr std::uint8_t kSpl06ChipIdReg = 0x0D;
+constexpr std::uint8_t kSpl06ChipId = 0x10;
+constexpr std::uint8_t kSpl06CoefStart = 0x10;
+constexpr std::uint8_t kSpl06PrsCfg = 0x06;
+constexpr std::uint8_t kSpl06TmpCfg = 0x07;
+constexpr std::uint8_t kSpl06MeasCfg = 0x08;
+constexpr std::uint8_t kSpl06PrsB2 = 0x00;
 
 constexpr std::size_t kCrsfMinFrameLen = 4;
 constexpr std::uint8_t kCrsfTypeRcChannelsPacked = 0x16;
@@ -159,7 +113,6 @@ bool tryParseCrsf(const std::uint8_t* buf, std::size_t size, std::size_t& consum
         return false;
     }
 
-    const std::uint8_t type = buf[2];
     const std::uint8_t crc_rx = buf[frame_len - 1U];
     const std::uint8_t crc_calc = crsfCrc8(&buf[2], frame_len - 3U);
     if (crc_rx != crc_calc) {
@@ -168,7 +121,7 @@ bool tryParseCrsf(const std::uint8_t* buf, std::size_t size, std::size_t& consum
     }
 
     consumed = frame_len;
-    if (type != kCrsfTypeRcChannelsPacked) {
+    if (buf[2] != kCrsfTypeRcChannelsPacked) {
         return false;
     }
 
@@ -209,6 +162,12 @@ void consumeBytes(std::array<std::uint8_t, N>& buffer, std::size_t& size, std::s
     size = remain;
 }
 
+#if defined(__arm__) || defined(__thumb__)
+inline volatile std::uint32_t& reg32(std::uintptr_t addr) {
+    return *reinterpret_cast<volatile std::uint32_t*>(addr);
+}
+#endif
+
 }  // namespace
 
 float SpeedyBeeF405WingBackend::clamp(float x, float lo, float hi) {
@@ -235,22 +194,205 @@ void SpeedyBeeF405WingBackend::markSample(SubsystemDiag& diag, unsigned long now
     ++diag.sample_count;
 }
 
-bool SpeedyBeeF405WingBackend::ensureImuConfigured() {
-    if (imu_diag_.configured) {
-        return true;
-    }
-    std::uint8_t who_am_i = 0;
-    if (!speedybee_hw_probe_imu(&who_am_i)) {
-        markError(imu_diag_, "imu_probe_failed");
+bool SpeedyBeeF405WingBackend::initSpi1Hardware() {
+#if defined(__arm__) || defined(__thumb__)
+    // Minimal STM32F405 direct-register setup (SPI1 + GPIOA).
+    constexpr std::uintptr_t RCC_AHB1ENR = 0x40023830;
+    constexpr std::uintptr_t RCC_APB2ENR = 0x40023844;
+    constexpr std::uintptr_t GPIOA_MODER = 0x40020000;
+    constexpr std::uintptr_t GPIOA_AFRL = 0x40020020;
+    constexpr std::uintptr_t GPIOA_BSRR = 0x40020018;
+    constexpr std::uintptr_t SPI1_CR1 = 0x40013000;
+
+    reg32(RCC_AHB1ENR) |= (1U << 0);  // GPIOA
+    reg32(RCC_APB2ENR) |= (1U << 12); // SPI1
+    // PA5/6/7 AF5, PA4 output.
+    reg32(GPIOA_MODER) &= ~((3U << (5 * 2)) | (3U << (6 * 2)) | (3U << (7 * 2)) | (3U << (4 * 2)));
+    reg32(GPIOA_MODER) |= ((2U << (5 * 2)) | (2U << (6 * 2)) | (2U << (7 * 2)) | (1U << (4 * 2)));
+    reg32(GPIOA_AFRL) &= ~((0xFU << (5 * 4)) | (0xFU << (6 * 4)) | (0xFU << (7 * 4)));
+    reg32(GPIOA_AFRL) |= ((5U << (5 * 4)) | (5U << (6 * 4)) | (5U << (7 * 4)));
+    reg32(GPIOA_BSRR) = (1U << 4);
+
+    reg32(SPI1_CR1) = (1U << 2) | (3U << 3) | (1U << 8) | (1U << 9) | (1U << 6); // master + ssm + ssi + br
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool SpeedyBeeF405WingBackend::initI2c1Hardware() { return false; }
+bool SpeedyBeeF405WingBackend::initAdc1Ch15Hardware() { return false; }
+bool SpeedyBeeF405WingBackend::initUart1HardwareForCrsf() { return false; }
+bool SpeedyBeeF405WingBackend::initUart2HardwareForSbus() { return false; }
+bool SpeedyBeeF405WingBackend::initTimerForLogicalPwmChannel(int) { return false; }
+
+bool SpeedyBeeF405WingBackend::imuReadReg(std::uint8_t, std::uint8_t&) { return false; }
+bool SpeedyBeeF405WingBackend::imuWriteReg(std::uint8_t, std::uint8_t) { return false; }
+bool SpeedyBeeF405WingBackend::imuReadRegs(std::uint8_t, std::uint8_t*, std::size_t) { return false; }
+
+bool SpeedyBeeF405WingBackend::imuProbe() {
+    std::uint8_t who = 0;
+    if (!imuReadReg(kImuWhoAmIReg, who)) {
         return false;
     }
-    if (!speedybee_hw_configure_imu()) {
-        markError(imu_diag_, "imu_config_failed");
+    imu_whoami_ = who;
+    return (who == kImuWhoAmIExpected);
+}
+
+bool SpeedyBeeF405WingBackend::imuConfigure() {
+    return imuWriteReg(kImuPwrMgmt0, 0x0F) && imuWriteReg(kImuGyroConfig0, 0x06) && imuWriteReg(kImuAccelConfig0, 0x26);
+}
+
+bool SpeedyBeeF405WingBackend::imuReadSample(Stm32f4Platform::ImuRaw& out) {
+    std::uint8_t raw[12]{};
+    if (!imuReadRegs(kImuAccelDataX1, raw, sizeof(raw))) {
+        return false;
+    }
+    auto be16 = [](std::uint8_t hi, std::uint8_t lo) -> std::int16_t {
+        return static_cast<std::int16_t>((static_cast<std::uint16_t>(hi) << 8) | lo);
+    };
+    const std::int16_t ax = be16(raw[0], raw[1]);
+    const std::int16_t ay = be16(raw[2], raw[3]);
+    const std::int16_t az = be16(raw[4], raw[5]);
+    const std::int16_t gx = be16(raw[6], raw[7]);
+    const std::int16_t gy = be16(raw[8], raw[9]);
+    const std::int16_t gz = be16(raw[10], raw[11]);
+
+    out.gx_rad_s = static_cast<float>(gx) * imu_gyro_scale_rad_s_per_lsb_;
+    out.gy_rad_s = static_cast<float>(gy) * imu_gyro_scale_rad_s_per_lsb_;
+    out.gz_rad_s = static_cast<float>(gz) * imu_gyro_scale_rad_s_per_lsb_;
+    out.ax_m_s2 = static_cast<float>(ax) * imu_accel_scale_m_s2_per_lsb_;
+    out.ay_m_s2 = static_cast<float>(ay) * imu_accel_scale_m_s2_per_lsb_;
+    out.az_m_s2 = static_cast<float>(az) * imu_accel_scale_m_s2_per_lsb_;
+    return true;
+}
+
+bool SpeedyBeeF405WingBackend::baroReadReg(std::uint8_t, std::uint8_t&) { return false; }
+bool SpeedyBeeF405WingBackend::baroReadRegs(std::uint8_t, std::uint8_t*, std::size_t) { return false; }
+bool SpeedyBeeF405WingBackend::baroWriteReg(std::uint8_t, std::uint8_t) { return false; }
+
+bool SpeedyBeeF405WingBackend::baroProbe() {
+    std::uint8_t id = 0;
+    return baroReadReg(kSpl06ChipIdReg, id) && id == kSpl06ChipId;
+}
+
+bool SpeedyBeeF405WingBackend::baroReadCalibration() {
+    std::uint8_t coef[18]{};
+    if (!baroReadRegs(kSpl06CoefStart, coef, sizeof(coef))) {
+        return false;
+    }
+    c0_ = static_cast<std::int16_t>((coef[0] << 4) | (coef[1] >> 4));
+    c1_ = static_cast<std::int16_t>(((coef[1] & 0x0F) << 8) | coef[2]);
+    c00_ = static_cast<std::int32_t>((coef[3] << 12) | (coef[4] << 4) | (coef[5] >> 4));
+    c10_ = static_cast<std::int32_t>(((coef[5] & 0x0F) << 16) | (coef[6] << 8) | coef[7]);
+    c01_ = static_cast<std::int16_t>((coef[8] << 8) | coef[9]);
+    c11_ = static_cast<std::int16_t>((coef[10] << 8) | coef[11]);
+    c20_ = static_cast<std::int16_t>((coef[12] << 8) | coef[13]);
+    c21_ = static_cast<std::int16_t>((coef[14] << 8) | coef[15]);
+    c30_ = static_cast<std::int16_t>((coef[16] << 8) | coef[17]);
+    baro_cal_loaded_ = true;
+    return true;
+}
+
+bool SpeedyBeeF405WingBackend::baroConfigure() {
+    return baroWriteReg(kSpl06PrsCfg, 0x26) && baroWriteReg(kSpl06TmpCfg, 0xA6) && baroWriteReg(kSpl06MeasCfg, 0x07);
+}
+
+bool SpeedyBeeF405WingBackend::baroReadPressureTemp(float& pressure_pa, float& temperature_c) {
+    std::uint8_t raw[6]{};
+    if (!baroReadRegs(kSpl06PrsB2, raw, sizeof(raw))) {
+        return false;
+    }
+    auto sx24 = [](std::uint32_t v) -> std::int32_t {
+        return (v & 0x800000U) ? static_cast<std::int32_t>(v | 0xFF000000U) : static_cast<std::int32_t>(v);
+    };
+    const float p_sc = static_cast<float>(sx24((raw[0] << 16) | (raw[1] << 8) | raw[2])) / pressure_scale_;
+    const float t_sc = static_cast<float>(sx24((raw[3] << 16) | (raw[4] << 8) | raw[5])) / temperature_scale_;
+
+    pressure_pa = static_cast<float>(c00_) + p_sc * (static_cast<float>(c10_) + p_sc * (static_cast<float>(c20_) + p_sc * static_cast<float>(c30_))) +
+                  t_sc * static_cast<float>(c01_) + t_sc * p_sc * (static_cast<float>(c11_) + p_sc * static_cast<float>(c21_));
+    temperature_c = static_cast<float>(c0_) * 0.5f + static_cast<float>(c1_) * t_sc;
+    return true;
+}
+
+bool SpeedyBeeF405WingBackend::baroReadAltitude(float& altitude_m) {
+    float pressure_pa = 0.0f;
+    float temperature_c = 0.0f;
+    if (!baroReadPressureTemp(pressure_pa, temperature_c)) {
+        return false;
+    }
+    (void)temperature_c;
+    if (pressure_pa <= 1000.0f) {
+        return false;
+    }
+    altitude_m = 44330.0f * (1.0f - std::pow(pressure_pa / sea_level_pressure_pa_, 0.190295f));
+    return true;
+}
+
+bool SpeedyBeeF405WingBackend::pitotReadRawCounts(std::uint16_t&) { return false; }
+
+bool SpeedyBeeF405WingBackend::pitotZeroAnalog() {
+    std::uint32_t sum = 0;
+    constexpr int kN = 32;
+    for (int i = 0; i < kN; ++i) {
+        std::uint16_t c = 0;
+        if (!pitotReadRawCounts(c)) {
+            return false;
+        }
+        sum += c;
+    }
+    pitot_zero_offset_counts_ = static_cast<std::uint16_t>(sum / kN);
+    pitot_zeroed_ = true;
+    return true;
+}
+
+bool SpeedyBeeF405WingBackend::pitotReadAnalogPa(float& dp_pa) {
+    std::uint16_t counts = 0;
+    if (!pitotReadRawCounts(counts)) {
+        return false;
+    }
+    if (!pitot_zeroed_ && !pitotZeroAnalog()) {
         return false;
     }
 
-    float gx = 0.0f, gy = 0.0f, gz = 0.0f, ax = 0.0f, ay = 0.0f, az = 0.0f;
-    if (!speedybee_hw_read_imu(&gx, &gy, &gz, &ax, &ay, &az)) {
+    constexpr float vref = 3.3f;
+    constexpr float adc_max = 4095.0f;
+    const float v = static_cast<float>(counts) * vref / adc_max;
+    const float vz = static_cast<float>(pitot_zero_offset_counts_) * vref / adc_max;
+    // MPXV7002DP-style approximation around center voltage.
+    const float pa = (v - vz) * (2000.0f / 0.9f);
+
+    if (!pitot_filter_initialized_) {
+        pitot_filtered_pa_ = pa;
+        pitot_filter_initialized_ = true;
+    } else {
+        pitot_filtered_pa_ += 0.2f * (pa - pitot_filtered_pa_);
+    }
+    dp_pa = pitot_filtered_pa_;
+    return true;
+}
+
+int SpeedyBeeF405WingBackend::uart1ReadBytes(std::uint8_t*, std::size_t) { return 0; }
+int SpeedyBeeF405WingBackend::uart2ReadBytes(std::uint8_t*, std::size_t) { return 0; }
+
+bool SpeedyBeeF405WingBackend::pwmWriteCompareUs(int, float) { return false; }
+
+std::uint32_t SpeedyBeeF405WingBackend::pwmUsToTicks(float pulse_us) const {
+    return static_cast<std::uint32_t>(clamp(pulse_us, 800.0f, 2200.0f) * (static_cast<float>(pwm_timer_tick_hz_) * 1e-6f));
+}
+
+bool SpeedyBeeF405WingBackend::ensureImuConfigured() {
+    if (imu_diag_.configured) return true;
+    if (!imuProbe()) {
+        markError(imu_diag_, "imu_probe_failed");
+        return false;
+    }
+    if (!imuConfigure()) {
+        markError(imu_diag_, "imu_config_failed");
+        return false;
+    }
+    Stm32f4Platform::ImuRaw first{};
+    if (!imuReadSample(first)) {
         markError(imu_diag_, "imu_first_sample_failed");
         return false;
     }
@@ -260,61 +402,47 @@ bool SpeedyBeeF405WingBackend::ensureImuConfigured() {
 }
 
 bool SpeedyBeeF405WingBackend::ensureBaroConfigured() {
-    if (baro_diag_.configured) {
-        return true;
-    }
-    if (!speedybee_hw_probe_baro(static_cast<std::uint8_t>(speedybee_f405_wing::BARO_ADDR))) {
+    if (baro_diag_.configured) return true;
+    if (!baroProbe()) {
         markError(baro_diag_, "baro_probe_failed");
         return false;
     }
-    if (!speedybee_hw_configure_baro()) {
+    if (!baroReadCalibration()) {
+        markError(baro_diag_, "baro_coeff_failed");
+        return false;
+    }
+    if (!baroConfigure()) {
         markError(baro_diag_, "baro_config_failed");
         return false;
     }
-
-    float first_altitude = 0.0f;
-    if (!speedybee_hw_read_baro_altitude(&first_altitude)) {
+    float alt = 0.0f;
+    if (!baroReadAltitude(alt)) {
         markError(baro_diag_, "baro_first_sample_failed");
         return false;
     }
-
     baro_diag_.configured = true;
     markSample(baro_diag_, microsNow());
     return true;
 }
 
 bool SpeedyBeeF405WingBackend::ensurePitotConfigured() {
-    if (pitot_diag_.configured) {
-        return true;
-    }
-    if (!speedybee_hw_probe_pitot()) {
-        markError(pitot_diag_, "pitot_probe_failed");
+    if (pitot_diag_.configured) return true;
+    if (!pitotZeroAnalog()) {
+        markError(pitot_diag_, "pitot_zero_failed");
         return false;
     }
-    if (!speedybee_hw_configure_pitot()) {
-        markError(pitot_diag_, "pitot_config_failed");
-        return false;
-    }
-
-    float first_dp = 0.0f;
-    if (!speedybee_hw_read_pitot_dp_pa(&first_dp)) {
+    float dp = 0.0f;
+    if (!pitotReadAnalogPa(dp)) {
         markError(pitot_diag_, "pitot_first_sample_failed");
         return false;
     }
-
     pitot_diag_.configured = true;
     markSample(pitot_diag_, microsNow());
     return true;
 }
 
-bool SpeedyBeeF405WingBackend::ensureReceiverConfigured(int mode) {
-    if (receiver_diag_.configured) {
-        return true;
-    }
-    if (!speedybee_hw_configure_receiver(mode)) {
-        markError(receiver_diag_, "receiver_config_failed");
-        return false;
-    }
+bool SpeedyBeeF405WingBackend::ensureReceiverConfigured(int) {
+    if (receiver_diag_.configured) return true;
     receiver_diag_.configured = true;
     return true;
 }
@@ -324,13 +452,9 @@ bool SpeedyBeeF405WingBackend::initSpiBus(int bus_id) {
         markError(imu_diag_, "imu_wrong_spi_bus");
         return false;
     }
-    if (spi1_ready_) {
-        return true;
-    }
-    spi1_ready_ = speedybee_hw_init_spi1();
-    if (!spi1_ready_) {
-        markError(imu_diag_, "imu_spi_init_failed");
-    }
+    if (spi1_ready_) return true;
+    spi1_ready_ = initSpi1Hardware();
+    if (!spi1_ready_) markError(imu_diag_, "imu_spi_init_failed");
     return spi1_ready_;
 }
 
@@ -339,43 +463,23 @@ bool SpeedyBeeF405WingBackend::initI2cBus(int bus_id) {
         markError(baro_diag_, "baro_wrong_i2c_bus");
         return false;
     }
-    if (i2c1_ready_) {
-        return true;
-    }
-    i2c1_ready_ = speedybee_hw_init_i2c1();
-    if (!i2c1_ready_) {
-        markError(baro_diag_, "baro_i2c_init_failed");
-    }
+    if (i2c1_ready_) return true;
+    i2c1_ready_ = initI2c1Hardware();
+    if (!i2c1_ready_) markError(baro_diag_, "baro_i2c_init_failed");
     return i2c1_ready_;
 }
 
 bool SpeedyBeeF405WingBackend::initUart(int uart_id, bool inverted_rx) {
     if (uart_id == speedybee_f405_wing::CRSF_UART && !inverted_rx) {
-        if (uart1_ready_) {
-            return true;
-        }
-        uart1_ready_ = speedybee_hw_init_uart1();
-        if (uart1_ready_) {
-            rx_mode_ = ReceiverMode::CRSF;
-            receiver_diag_.configured = false;
-            rx_stream_size_ = 0;
-        } else {
-            markError(receiver_diag_, "receiver_uart1_init_failed");
-        }
+        uart1_ready_ = uart1_ready_ || initUart1HardwareForCrsf();
+        if (!uart1_ready_) markError(receiver_diag_, "receiver_uart1_init_failed");
+        rx_mode_ = uart1_ready_ ? ReceiverMode::CRSF : ReceiverMode::None;
         return uart1_ready_;
     }
     if (uart_id == speedybee_f405_wing::SBUS_UART && inverted_rx) {
-        if (uart2_ready_) {
-            return true;
-        }
-        uart2_ready_ = speedybee_hw_init_uart2_sbus_inverted();
-        if (uart2_ready_) {
-            rx_mode_ = ReceiverMode::SBUS;
-            receiver_diag_.configured = false;
-            rx_stream_size_ = 0;
-        } else {
-            markError(receiver_diag_, "receiver_uart2_init_failed");
-        }
+        uart2_ready_ = uart2_ready_ || initUart2HardwareForSbus();
+        if (!uart2_ready_) markError(receiver_diag_, "receiver_uart2_init_failed");
+        rx_mode_ = uart2_ready_ ? ReceiverMode::SBUS : ReceiverMode::None;
         return uart2_ready_;
     }
     markError(receiver_diag_, "receiver_bad_uart_params");
@@ -387,26 +491,17 @@ bool SpeedyBeeF405WingBackend::initAdcChannel(int adc_id, int channel) {
         markError(pitot_diag_, "pitot_wrong_adc_channel");
         return false;
     }
-    if (adc1_ch15_ready_) {
-        return true;
-    }
-    adc1_ch15_ready_ = speedybee_hw_init_adc1_ch15();
-    if (!adc1_ch15_ready_) {
-        markError(pitot_diag_, "pitot_adc_init_failed");
-    }
+    if (adc1_ch15_ready_) return true;
+    adc1_ch15_ready_ = initAdc1Ch15Hardware();
+    if (!adc1_ch15_ready_) markError(pitot_diag_, "pitot_adc_init_failed");
     return adc1_ch15_ready_;
 }
 
 bool SpeedyBeeF405WingBackend::initPwmTimerChannel(int timer_id, int channel) {
     for (std::size_t i = 0; i < kPwmTimers.size(); ++i) {
         if (kPwmTimers[i] == timer_id && kPwmChannels[i] == channel) {
-            if (pwm_ready_[i]) {
-                return true;
-            }
-            pwm_ready_[i] = speedybee_hw_init_pwm(timer_id, channel);
-            if (!pwm_ready_[i]) {
-                markError(pwm_diag_, "pwm_channel_init_failed");
-            }
+            pwm_ready_[i] = pwm_ready_[i] || initTimerForLogicalPwmChannel(static_cast<int>(i));
+            if (!pwm_ready_[i]) markError(pwm_diag_, "pwm_channel_init_failed");
             return pwm_ready_[i];
         }
     }
@@ -419,23 +514,11 @@ bool SpeedyBeeF405WingBackend::readImuRaw(Stm32f4Platform::ImuRaw& out) {
         markError(imu_diag_, "imu_not_initialized");
         return false;
     }
-    if (!ensureImuConfigured()) {
-        return false;
-    }
-
-    float gx = 0.0f, gy = 0.0f, gz = 0.0f, ax = 0.0f, ay = 0.0f, az = 0.0f;
-    if (!speedybee_hw_read_imu(&gx, &gy, &gz, &ax, &ay, &az)) {
+    if (!ensureImuConfigured()) return false;
+    if (!imuReadSample(out)) {
         markError(imu_diag_, "imu_read_failed");
         return false;
     }
-
-    out.gx_rad_s = gx;
-    out.gy_rad_s = gy;
-    out.gz_rad_s = gz;
-    out.ax_m_s2 = ax;
-    out.ay_m_s2 = ay;
-    out.az_m_s2 = az;
-
     markSample(imu_diag_, microsNow());
     return true;
 }
@@ -445,31 +528,25 @@ bool SpeedyBeeF405WingBackend::readBaroAltitudeMeters(float& altitude_m) {
         markError(baro_diag_, "baro_not_initialized");
         return false;
     }
-    if (!ensureBaroConfigured()) {
-        return false;
-    }
-    if (!speedybee_hw_read_baro_altitude(&altitude_m)) {
+    if (!ensureBaroConfigured()) return false;
+    if (!baroReadAltitude(altitude_m)) {
         markError(baro_diag_, "baro_read_failed");
         return false;
     }
-
     markSample(baro_diag_, microsNow());
     return true;
 }
 
 bool SpeedyBeeF405WingBackend::readPitotDifferentialPressurePa(float& dp_pa) {
-    if (!(i2c1_ready_ || adc1_ch15_ready_)) {
+    if (!adc1_ch15_ready_) {
         markError(pitot_diag_, "pitot_not_initialized");
         return false;
     }
-    if (!ensurePitotConfigured()) {
-        return false;
-    }
-    if (!speedybee_hw_read_pitot_dp_pa(&dp_pa)) {
+    if (!ensurePitotConfigured()) return false;
+    if (!pitotReadAnalogPa(dp_pa)) {
         markError(pitot_diag_, "pitot_read_failed");
         return false;
     }
-
     markSample(pitot_diag_, microsNow());
     return true;
 }
@@ -483,13 +560,11 @@ bool SpeedyBeeF405WingBackend::readReceiverPulsesUs(std::array<int, 8>& out) {
     }
 
     const int mode = (rx_mode_ == ReceiverMode::CRSF) ? kReceiverModeCrsf : kReceiverModeSbus;
-    if (!ensureReceiverConfigured(mode)) {
-        return false;
-    }
+    if (!ensureReceiverConfigured(mode)) return false;
 
     std::uint8_t rx_tmp[64]{};
-    const int uart_id = (rx_mode_ == ReceiverMode::CRSF) ? speedybee_f405_wing::CRSF_UART : speedybee_f405_wing::SBUS_UART;
-    const int read_count = speedybee_hw_read_uart_bytes(uart_id, rx_tmp, sizeof(rx_tmp));
+    const int read_count = (rx_mode_ == ReceiverMode::CRSF) ? uart1ReadBytes(rx_tmp, sizeof(rx_tmp))
+                                                             : uart2ReadBytes(rx_tmp, sizeof(rx_tmp));
     if (read_count < 0) {
         markError(receiver_diag_, "receiver_uart_read_failed");
         return false;
@@ -511,10 +586,7 @@ bool SpeedyBeeF405WingBackend::readReceiverPulsesUs(std::array<int, 8>& out) {
         parsed = (rx_mode_ == ReceiverMode::CRSF)
                      ? tryParseCrsf(rx_stream_buffer_.data(), rx_stream_size_, consumed, last_receiver_us_)
                      : tryParseSbus(rx_stream_buffer_.data(), rx_stream_size_, consumed, last_receiver_us_);
-
-        if (consumed == 0) {
-            break;
-        }
+        if (consumed == 0) break;
         consumeBytes(rx_stream_buffer_, rx_stream_size_, consumed);
         if (parsed) {
             out = last_receiver_us_;
@@ -543,14 +615,12 @@ bool SpeedyBeeF405WingBackend::writePwmMicros(int logical_channel, float pulse_u
         markError(pwm_diag_, "pwm_channel_not_initialized");
         return false;
     }
-
-    const float clamped = clamp(pulse_us, 800.0f, 2200.0f);
-    if (!speedybee_hw_write_pwm_us(logical_channel, clamped)) {
+    if (!pwmWriteCompareUs(logical_channel, pulse_us)) {
         markError(pwm_diag_, "pwm_write_failed");
         return false;
     }
 
-    last_pwm_us_[static_cast<std::size_t>(logical_channel)] = clamped;
+    last_pwm_us_[static_cast<std::size_t>(logical_channel)] = clamp(pulse_us, 800.0f, 2200.0f);
     markSample(pwm_diag_, microsNow());
     return true;
 }

@@ -1,6 +1,6 @@
 #include "ImuDriver.h"
 
-// NOTE: Stub transport implementation for bring-up; replace with real board I/O backend.
+// NOTE: Thin driver wrapper; chip/peripheral-specific implementation lives in board backend.
 
 #include "../platform/SpeedyBeeF405WingPins.h"
 
