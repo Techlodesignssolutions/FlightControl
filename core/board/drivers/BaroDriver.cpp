@@ -1,5 +1,7 @@
 #include "BaroDriver.h"
 
+// NOTE: Stub transport implementation for bring-up; replace with real board I/O backend.
+
 #include "../platform/SpeedyBeeF405WingPins.h"
 
 bool BaroDriver::init() {

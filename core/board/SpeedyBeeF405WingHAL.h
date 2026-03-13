@@ -69,6 +69,7 @@ public:
         bool reverse_rudder = false;
         bool reverse_throttle = false;
 
+        // Indices into raw sensor axes, before vehicle-axis remap.
         int imu_roll_axis = 0;
         int imu_pitch_axis = 1;
         int imu_yaw_axis = 2;
@@ -76,6 +77,7 @@ public:
         bool invert_pitch_axis = false;
         bool invert_yaw_axis = false;
 
+        // Subtracted from raw differential pressure prior to TAS conversion.
         float pitot_zero_offset_pa = 0.0f;
         float air_density_kg_m3 = 1.225f;
 
@@ -87,6 +89,7 @@ public:
         float airspeed_lpf_alpha = 0.15f;
         float climb_rate_lpf_alpha = 0.2f;
 
+        // Complementary filter gain: high->more gyro trust, low->more accel trust.
         float attitude_complementary_alpha = 0.98f;
     };
 
@@ -138,29 +141,34 @@ private:
     float toServoPulseUs(float cmd_symm, bool reverse) const;
     float toThrottlePulseUs(float cmd_norm, bool reverse) const;
 
+    // Runtime configuration/state.
     BoardConfig config_{};
     bool initialized_{false};
+    HalError last_error_{HalError::None};
 
     unsigned long last_sensor_time_us_{0};
     bool altitude_initialized_{false};
     float last_altitude_m_{0.0f};
 
+    // AHRS state.
     bool attitude_initialized_{false};
     Ahrs ahrs_{};
 
-    SensorFrame sensor_frame_{};
-    std::array<float, 8> rc_channels_{};
-    std::array<float, 8> pwm_output_us_{};
-
+    // Filter state.
     bool airspeed_filter_initialized_{false};
     float filtered_airspeed_mps_{0.0f};
     bool climb_filter_initialized_{false};
     float filtered_climb_rate_mps_{0.0f};
 
+    // Debug mirrors / bench visibility.
+    SensorFrame debug_last_sensor_frame_{};
+    std::array<float, 8> rc_channels_{};
+    std::array<float, 8> debug_last_pwm_output_us_{};
+
+    // Drivers.
     ImuDriver imu_driver_{};
     BaroDriver baro_driver_{};
     PitotDriver pitot_driver_{};
     ReceiverDriver receiver_driver_{};
     PwmDriver pwm_driver_{};
-    HalError last_error_{HalError::None};
 };

@@ -19,28 +19,45 @@ SpeedyBeeF405WingHAL::SpeedyBeeF405WingHAL()
 SpeedyBeeF405WingHAL::SpeedyBeeF405WingHAL(const BoardConfig& config)
     : config_(config) {
     rc_channels_.fill(0.0f);
-    pwm_output_us_.fill(config_.servo_neutral_us);
+    debug_last_pwm_output_us_.fill(config_.servo_neutral_us);
 }
 
 bool SpeedyBeeF405WingHAL::init() {
     last_error_ = HalError::None;
-    bool ok = true;
-    if (!initImu()) { last_error_ = HalError::InitImuFailed; ok = false; }
-    if (!initBaro()) { last_error_ = HalError::InitBaroFailed; ok = false; }
-    if (!initPitot()) { last_error_ = HalError::InitPitotFailed; ok = false; }
-    if (!initReceiver()) { last_error_ = HalError::InitReceiverFailed; ok = false; }
-    if (!initPwm()) { last_error_ = HalError::InitPwmFailed; ok = false; }
 
-    initialized_ = ok;
+    if (!initImu()) {
+        last_error_ = HalError::InitImuFailed;
+        initialized_ = false;
+        return false;
+    }
+    if (!initBaro()) {
+        last_error_ = HalError::InitBaroFailed;
+        initialized_ = false;
+        return false;
+    }
+    if (!initPitot()) {
+        last_error_ = HalError::InitPitotFailed;
+        initialized_ = false;
+        return false;
+    }
+    if (!initReceiver()) {
+        last_error_ = HalError::InitReceiverFailed;
+        initialized_ = false;
+        return false;
+    }
+    if (!initPwm()) {
+        last_error_ = HalError::InitPwmFailed;
+        initialized_ = false;
+        return false;
+    }
+
+    initialized_ = true;
     airspeed_filter_initialized_ = false;
     climb_filter_initialized_ = false;
     altitude_initialized_ = false;
     attitude_initialized_ = false;
     last_sensor_time_us_ = microsNow();
-    if (!ok) {
-        last_error_ = HalError::PwmWriteFailed;
-    }
-    return ok;
+    return true;
 }
 
 bool SpeedyBeeF405WingHAL::readSensors(SensorData& sensor_data) {
@@ -54,6 +71,7 @@ bool SpeedyBeeF405WingHAL::readSensors(SensorData& sensor_data) {
 
     SensorFrame frame{};
     if (!readImuAndAttitude(frame, dt_s)) {
+        // Policy: retain previous AHRS state across transient IMU read failures.
         last_error_ = HalError::ImuReadFailed;
         return false;
     }
@@ -93,7 +111,8 @@ bool SpeedyBeeF405WingHAL::readSensors(SensorData& sensor_data) {
     sensor_data.airspeed_mps = std::max(0.0f, filtered_airspeed_mps_);
     sensor_data.timestamp_us = now_us;
 
-    sensor_frame_ = frame;
+    debug_last_sensor_frame_ = frame;
+    last_error_ = HalError::None;
     return true;
 }
 
@@ -110,6 +129,8 @@ bool SpeedyBeeF405WingHAL::readPilotInput(PilotInput& pilot_input) {
     pilot_input.pitch_cmd = clamp(rc_channels_[config_.rc_pitch_channel], -1.0f, 1.0f);
     pilot_input.yaw_cmd = clamp(rc_channels_[config_.rc_yaw_channel], -1.0f, 1.0f);
     pilot_input.throttle_cmd = clamp(rc_channels_[config_.rc_throttle_channel], 0.0f, 1.0f);
+
+    last_error_ = HalError::None;
     return true;
 }
 
@@ -124,17 +145,29 @@ bool SpeedyBeeF405WingHAL::writeActuators(const ActuatorCommand& cmd) {
     const float throttle_us = toThrottlePulseUs(cmd.throttle, config_.reverse_throttle);
 
     last_error_ = HalError::None;
-    bool ok = true;
-    ok = ok && writePwmMicros(config_.pwm_left_elevon, left_us);
-    ok = ok && writePwmMicros(config_.pwm_right_elevon, right_us);
-    ok = ok && writePwmMicros(config_.pwm_rudder, rudder_us);
-    ok = ok && writePwmMicros(config_.pwm_throttle, throttle_us);
 
-    pwm_output_us_[config_.pwm_left_elevon] = left_us;
-    pwm_output_us_[config_.pwm_right_elevon] = right_us;
-    pwm_output_us_[config_.pwm_rudder] = rudder_us;
-    pwm_output_us_[config_.pwm_throttle] = throttle_us;
-    return ok;
+    if (!writePwmMicros(config_.pwm_left_elevon, left_us)) {
+        last_error_ = HalError::PwmWriteFailed;
+        return false;
+    }
+    if (!writePwmMicros(config_.pwm_right_elevon, right_us)) {
+        last_error_ = HalError::PwmWriteFailed;
+        return false;
+    }
+    if (!writePwmMicros(config_.pwm_rudder, rudder_us)) {
+        last_error_ = HalError::PwmWriteFailed;
+        return false;
+    }
+    if (!writePwmMicros(config_.pwm_throttle, throttle_us)) {
+        last_error_ = HalError::PwmWriteFailed;
+        return false;
+    }
+
+    debug_last_pwm_output_us_[config_.pwm_left_elevon] = left_us;
+    debug_last_pwm_output_us_[config_.pwm_right_elevon] = right_us;
+    debug_last_pwm_output_us_[config_.pwm_rudder] = rudder_us;
+    debug_last_pwm_output_us_[config_.pwm_throttle] = throttle_us;
+    return true;
 }
 
 unsigned long SpeedyBeeF405WingHAL::microsNow() {
@@ -268,17 +301,22 @@ bool SpeedyBeeF405WingHAL::writePwmMicros(int logical_channel, float pulse_us) {
 
 #if defined(UNIT_TEST) || defined(BENCH_HARNESS)
 void SpeedyBeeF405WingHAL::setSensorFrame(const SensorFrame& frame) {
-    sensor_frame_ = frame;
+    debug_last_sensor_frame_ = frame;
 
     ImuSample imu;
     imu.gx_rad_s = frame.p_rad_s;
     imu.gy_rad_s = frame.q_rad_s;
     imu.gz_rad_s = frame.r_rad_s;
-    imu.ax_m_s2 = 0.0f;
-    imu.ay_m_s2 = std::sin(frame.roll_rad) * kGravity;
-    imu.az_m_s2 = std::cos(frame.roll_rad) * kGravity;
-    imu_driver_.setSample(imu);
 
+    const float sr = std::sin(frame.roll_rad);
+    const float cr = std::cos(frame.roll_rad);
+    const float sp = std::sin(frame.pitch_rad);
+    const float cp = std::cos(frame.pitch_rad);
+    imu.ax_m_s2 = -sp * kGravity;
+    imu.ay_m_s2 = sr * cp * kGravity;
+    imu.az_m_s2 = cr * cp * kGravity;
+
+    imu_driver_.setSample(imu);
     baro_driver_.setAltitudeMeters(frame.altitude_m);
 
     const float rho = std::max(0.5f, config_.air_density_kg_m3);
@@ -287,8 +325,6 @@ void SpeedyBeeF405WingHAL::setSensorFrame(const SensorFrame& frame) {
 }
 
 void SpeedyBeeF405WingHAL::setRcChannels(const std::array<float, 8>& channels_norm) {
-    rc_channels_ = channels_norm;
-
     std::array<int, 8> pulses{};
     for (std::size_t i = 0; i < channels_norm.size(); ++i) {
         if (static_cast<int>(i) == config_.rc_throttle_channel) {
