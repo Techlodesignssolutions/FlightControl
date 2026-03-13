@@ -1,51 +1,15 @@
 {
   "version": 1,
   "metadata": {
-    "name": "speedybee_f405_wing_lqr_v1"
+    "name": "speedybee_f405_wing_minimal_lqr_v1"
   },
   "airspeed_breakpoints": [10.0, 15.0, 20.0, 26.0],
   "roll": {
-    "k_error": [1.30, 1.15, 1.00, 0.88],
-    "k_rate": [0.34, 0.30, 0.26, 0.23],
-    "trim": [0.00, 0.00, 0.00, 0.00]
+    "k_phi": [1.30, 1.15, 1.00, 0.88],
+    "k_p": [0.34, 0.30, 0.26, 0.23]
   },
   "pitch": {
-    "k_error": [1.45, 1.28, 1.12, 0.98],
-    "k_rate": [0.40, 0.35, 0.31, 0.28],
-    "trim": [0.00, 0.00, 0.00, 0.00]
-  },
-  "yaw": {
-    "k_error": [0.92, 0.82, 0.72, 0.62],
-    "k_rate": [0.28, 0.24, 0.21, 0.19],
-    "trim": [0.00, 0.00, 0.00, 0.00],
-    "coordination_gain": [0.38, 0.32, 0.27, 0.22]
-  },
-  "adaptive": {
-    "learning_rate": 0.009,
-    "leakage": 0.015,
-    "weight_limit": 0.22,
-    "output_limit_roll": 0.18,
-    "output_limit_pitch": 0.18,
-    "output_limit_yaw": 0.15,
-    "near_stall_airspeed": 8.5,
-    "mode_change_freeze_s": 1.2,
-    "stick_step_threshold": 0.18,
-    "regime_stability_delta": 1.0
-  },
-  "safety": {
-    "adaptive_limit_roll": 0.18,
-    "adaptive_limit_pitch": 0.18,
-    "adaptive_limit_yaw": 0.15,
-    "adaptive_rate_limit_roll": 0.65,
-    "adaptive_rate_limit_pitch": 0.65,
-    "adaptive_rate_limit_yaw": 0.55,
-    "total_limit_roll": 1.00,
-    "total_limit_pitch": 1.00,
-    "total_limit_yaw": 0.85
-  },
-  "controller": {
-    "yaw_stick_gain": 1.15,
-    "max_roll_cmd_rad": 0.698131701,
-    "max_pitch_cmd_rad": 0.488692191
+    "k_theta": [1.45, 1.28, 1.12, 0.98],
+    "k_q": [0.40, 0.35, 0.31, 0.28]
   }
 }
