@@ -1,4 +1,5 @@
 #include "SpeedyBeeF405WingHAL.h"
+#include "platform/SpeedyBeeF405WingBackend.h"
 
 #include <algorithm>
 #include <chrono>
@@ -24,6 +25,11 @@ SpeedyBeeF405WingHAL::SpeedyBeeF405WingHAL(const BoardConfig& config)
 
 bool SpeedyBeeF405WingHAL::init() {
     last_error_ = HalError::None;
+
+    if (config_.mode == HalMode::RealHardware && Stm32f4Platform::backend() == nullptr) {
+        static SpeedyBeeF405WingBackend backend;
+        Stm32f4Platform::installBackend(&backend);
+    }
 
     if (!initImu()) {
         last_error_ = HalError::InitImuFailed;
