@@ -62,6 +62,7 @@ bool SpeedyBeeF405WingHAL::init() {
 
 bool SpeedyBeeF405WingHAL::readSensors(SensorData& sensor_data) {
     if (!initialized_) {
+        last_error_ = HalError::NotInitialized;
         return false;
     }
 
@@ -118,6 +119,7 @@ bool SpeedyBeeF405WingHAL::readSensors(SensorData& sensor_data) {
 
 bool SpeedyBeeF405WingHAL::readPilotInput(PilotInput& pilot_input) {
     if (!initialized_) {
+        last_error_ = HalError::NotInitialized;
         return false;
     }
     if (!readReceiverFrame()) {
@@ -136,6 +138,7 @@ bool SpeedyBeeF405WingHAL::readPilotInput(PilotInput& pilot_input) {
 
 bool SpeedyBeeF405WingHAL::writeActuators(const ActuatorCommand& cmd) {
     if (!initialized_) {
+        last_error_ = HalError::NotInitialized;
         return false;
     }
 

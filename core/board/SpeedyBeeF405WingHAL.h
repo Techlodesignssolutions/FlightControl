@@ -24,7 +24,8 @@ public:
         BaroReadFailed,
         PitotReadFailed,
         ReceiverReadFailed,
-        PwmWriteFailed
+        PwmWriteFailed,
+        NotInitialized
     };
 
     enum class HalMode {
