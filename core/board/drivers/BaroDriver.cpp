@@ -1,8 +1,10 @@
 #include "BaroDriver.h"
 
+#include "../platform/SpeedyBeeF405WingPins.h"
+
 bool BaroDriver::init() {
-    initialized_ = true;
-    return true;
+    initialized_ = platform_.initI2cBus(speedybee_f405_wing::I2C_BUS);
+    return initialized_;
 }
 
 bool BaroDriver::readAltitudeMeters(float& altitude_m) const {
@@ -13,6 +15,8 @@ bool BaroDriver::readAltitudeMeters(float& altitude_m) const {
     return true;
 }
 
+#if defined(UNIT_TEST) || defined(BENCH_HARNESS)
 void BaroDriver::setAltitudeMeters(float altitude_m) {
     altitude_m_ = altitude_m;
 }
+#endif

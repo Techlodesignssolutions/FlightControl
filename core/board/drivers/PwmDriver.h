@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../platform/Stm32f4Platform.h"
+
 #include <array>
 
 class PwmDriver {
@@ -10,6 +12,7 @@ public:
     const std::array<float, 8>& lastWrittenMicros() const { return last_written_us_; }
 
 private:
+    Stm32f4Platform platform_{};
     std::array<float, 8> last_written_us_{{1500,1500,1500,1000,1500,1500,1500,1500}};
     bool initialized_{false};
 };

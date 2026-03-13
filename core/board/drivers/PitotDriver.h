@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../platform/Stm32f4Platform.h"
+
 class PitotDriver {
 public:
     enum class Source {
@@ -10,9 +12,12 @@ public:
     bool init(Source source);
     bool readDifferentialPressurePa(float& dp_pa) const;
 
+#if defined(UNIT_TEST) || defined(BENCH_HARNESS)
     void setDifferentialPressurePa(float dp_pa);
+#endif
 
 private:
+    Stm32f4Platform platform_{};
     Source source_{Source::DigitalI2C};
     float dp_pa_{0.0f};
     bool initialized_{false};

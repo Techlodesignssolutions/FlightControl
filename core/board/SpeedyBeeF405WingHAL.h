@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BoardHAL.h"
+#include "Ahrs.h"
 #include "drivers/BaroDriver.h"
 #include "drivers/ImuDriver.h"
 #include "drivers/PitotDriver.h"
@@ -12,6 +13,20 @@
 
 class SpeedyBeeF405WingHAL final : public BoardHAL {
 public:
+    enum class HalError {
+        None,
+        InitImuFailed,
+        InitBaroFailed,
+        InitPitotFailed,
+        InitReceiverFailed,
+        InitPwmFailed,
+        ImuReadFailed,
+        BaroReadFailed,
+        PitotReadFailed,
+        ReceiverReadFailed,
+        PwmWriteFailed
+    };
+
     enum class HalMode {
         RealHardware,
         BenchInjected
@@ -96,6 +111,8 @@ public:
     bool writeActuators(const ActuatorCommand& cmd) override;
     unsigned long microsNow() override;
 
+    HalError lastError() const { return last_error_; }
+
 #if defined(UNIT_TEST) || defined(BENCH_HARNESS)
     void setSensorFrame(const SensorFrame& frame);
     void setRcChannels(const std::array<float, 8>& channels_norm);
@@ -128,11 +145,8 @@ private:
     bool altitude_initialized_{false};
     float last_altitude_m_{0.0f};
 
-    // Internal AHRS/complementary state.
     bool attitude_initialized_{false};
-    float ahrs_roll_rad_{0.0f};
-    float ahrs_pitch_rad_{0.0f};
-    float ahrs_yaw_rad_{0.0f};
+    Ahrs ahrs_{};
 
     SensorFrame sensor_frame_{};
     std::array<float, 8> rc_channels_{};
@@ -148,4 +162,5 @@ private:
     PitotDriver pitot_driver_{};
     ReceiverDriver receiver_driver_{};
     PwmDriver pwm_driver_{};
+    HalError last_error_{HalError::None};
 };

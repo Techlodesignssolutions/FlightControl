@@ -1,8 +1,15 @@
 #include "PwmDriver.h"
 
+#include "../platform/SpeedyBeeF405WingPins.h"
+
 bool PwmDriver::init() {
-    initialized_ = true;
-    return true;
+    bool ok = true;
+    ok = ok && platform_.initPwmTimerChannel(speedybee_f405_wing::PWM0_TIMER, speedybee_f405_wing::PWM0_TIM_CHANNEL);
+    ok = ok && platform_.initPwmTimerChannel(speedybee_f405_wing::PWM1_TIMER, speedybee_f405_wing::PWM1_TIM_CHANNEL);
+    ok = ok && platform_.initPwmTimerChannel(speedybee_f405_wing::PWM2_TIMER, speedybee_f405_wing::PWM2_TIM_CHANNEL);
+    ok = ok && platform_.initPwmTimerChannel(speedybee_f405_wing::PWM3_TIMER, speedybee_f405_wing::PWM3_TIM_CHANNEL);
+    initialized_ = ok;
+    return initialized_;
 }
 
 bool PwmDriver::writeMicros(int logical_channel, float pulse_us) {
