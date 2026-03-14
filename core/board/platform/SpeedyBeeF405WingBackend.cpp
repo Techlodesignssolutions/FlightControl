@@ -132,11 +132,12 @@ bool waitFlag(std::uintptr_t addr, std::uint32_t mask, bool set, std::uint32_t t
 void imuCsLow() { reg32(GPIOA_BASE + GPIO_BSRR) = (1U << (4 + 16)); }
 void imuCsHigh() { reg32(GPIOA_BASE + GPIO_BSRR) = (1U << 4); }
 
-std::uint8_t spi1TransferByte(std::uint8_t b) {
-    if (!waitFlag(SPI1_BASE + SPI_SR, (1U << 1), true)) return 0;
-    reg32(SPI1_BASE + SPI_DR) = b;
-    if (!waitFlag(SPI1_BASE + SPI_SR, (1U << 0), true)) return 0;
-    return static_cast<std::uint8_t>(reg32(SPI1_BASE + SPI_DR));
+bool spi1TransferByte(std::uint8_t tx, std::uint8_t& rx) {
+    if (!waitFlag(SPI1_BASE + SPI_SR, (1U << 1), true)) return false;
+    reg32(SPI1_BASE + SPI_DR) = tx;
+    if (!waitFlag(SPI1_BASE + SPI_SR, (1U << 0), true)) return false;
+    rx = static_cast<std::uint8_t>(reg32(SPI1_BASE + SPI_DR));
+    return true;
 }
 
 bool i2c1Start() {
@@ -361,7 +362,7 @@ bool SpeedyBeeF405WingBackend::initUart1HardwareForCrsf() {
     reg32(GPIOA_BASE + GPIO_AFRH) &= ~((0xFU << ((9 - 8) * 4)) | (0xFU << ((10 - 8) * 4)));
     reg32(GPIOA_BASE + GPIO_AFRH) |= ((7U << ((9 - 8) * 4)) | (7U << ((10 - 8) * 4)));
 
-    reg32(USART1_BASE + USART_BRR) = usartBrrFromPclk(kUsart1PclkHz, kCrsfBaud)
+    reg32(USART1_BASE + USART_BRR) = usartBrrFromPclk(kUsart1PclkHz, kCrsfBaud);
     reg32(USART1_BASE + USART_CR1) = (1U << 13) | (1U << 2) | (1U << 3);
     return true;
 #else
@@ -379,7 +380,7 @@ bool SpeedyBeeF405WingBackend::initUart2HardwareForSbus() {
     reg32(GPIOA_BASE + GPIO_AFRL) &= ~((0xFU << (2 * 4)) | (0xFU << (3 * 4)));
     reg32(GPIOA_BASE + GPIO_AFRL) |= ((7U << (2 * 4)) | (7U << (3 * 4)));
 
-    reg32(USART2_BASE + USART_BRR) = usartBrrFromPclk(kUsart2PclkHz, kSbusBaud)
+    reg32(USART2_BASE + USART_BRR) = usartBrrFromPclk(kUsart2PclkHz, kSbusBaud);
     reg32(USART2_BASE + USART_CR2) = (2U << 12); // 2 stop bits
     // SBUS assumes SpeedyBee board's UART2-RX hardware inverted input path.
     reg32(USART2_BASE + USART_CR1) = (1U << 13) | (1U << 2) | (1U << 3) | (1U << 10); // parity enable
@@ -430,7 +431,7 @@ bool SpeedyBeeF405WingBackend::initTimerForLogicalPwmChannel(int logical_channel
     }
 
     const std::uint32_t safe_us = (logical_channel == 3) ? 1000U : 1500U;
-    const std::uint32_t safe_ticks = safe_us;
+    const std::uint32_t safe_ticks = pwmUsToTicks(static_cast<float>(safe_us));
     switch (ch) {
         case 1: reg32(base + TIM_CCR1) = safe_ticks; break;
         case 2: reg32(base + TIM_CCR2) = safe_ticks; break;
@@ -450,9 +451,16 @@ bool SpeedyBeeF405WingBackend::initTimerForLogicalPwmChannel(int logical_channel
 
 bool SpeedyBeeF405WingBackend::imuReadReg(std::uint8_t reg, std::uint8_t& value) {
 #if defined(__arm__) || defined(__thumb__)
+    std::uint8_t dummy = 0;
     imuCsLow();
-    (void)spi1TransferByte(static_cast<std::uint8_t>(reg | 0x80U));
-    value = spi1TransferByte(0x00);
+    if (!spi1TransferByte(static_cast<std::uint8_t>(reg | 0x80U), dummy)) {
+        imuCsHigh();
+        return false;
+    }
+    if (!spi1TransferByte(0x00, value)) {
+        imuCsHigh();
+        return false;
+    }
     (void)waitFlag(SPI1_BASE + SPI_SR, (1U << 7), false);
     imuCsHigh();
     return true;
@@ -465,9 +473,16 @@ bool SpeedyBeeF405WingBackend::imuReadReg(std::uint8_t reg, std::uint8_t& value)
 
 bool SpeedyBeeF405WingBackend::imuWriteReg(std::uint8_t reg, std::uint8_t value) {
 #if defined(__arm__) || defined(__thumb__)
+    std::uint8_t dummy = 0;
     imuCsLow();
-    (void)spi1TransferByte(static_cast<std::uint8_t>(reg & 0x7FU));
-    (void)spi1TransferByte(value);
+    if (!spi1TransferByte(static_cast<std::uint8_t>(reg & 0x7FU), dummy)) {
+        imuCsHigh();
+        return false;
+    }
+    if (!spi1TransferByte(value, dummy)) {
+        imuCsHigh();
+        return false;
+    }
     (void)waitFlag(SPI1_BASE + SPI_SR, (1U << 7), false);
     imuCsHigh();
     return true;
@@ -480,9 +495,18 @@ bool SpeedyBeeF405WingBackend::imuWriteReg(std::uint8_t reg, std::uint8_t value)
 
 bool SpeedyBeeF405WingBackend::imuReadRegs(std::uint8_t start_reg, std::uint8_t* dst, std::size_t len) {
 #if defined(__arm__) || defined(__thumb__)
+    std::uint8_t dummy = 0;
     imuCsLow();
-    (void)spi1TransferByte(static_cast<std::uint8_t>(start_reg | 0x80U));
-    for (std::size_t i = 0; i < len; ++i) dst[i] = spi1TransferByte(0x00);
+    if (!spi1TransferByte(static_cast<std::uint8_t>(start_reg | 0x80U), dummy)) {
+        imuCsHigh();
+        return false;
+    }
+    for (std::size_t i = 0; i < len; ++i) {
+        if (!spi1TransferByte(0x00, dst[i])) {
+            imuCsHigh();
+            return false;
+        }
+    }
     (void)waitFlag(SPI1_BASE + SPI_SR, (1U << 7), false);
     imuCsHigh();
     return true;
@@ -696,7 +720,15 @@ bool SpeedyBeeF405WingBackend::pitotReadAnalogPa(float& dp_pa) {
 int SpeedyBeeF405WingBackend::uart1ReadBytes(std::uint8_t* out, std::size_t max_len) {
 #if defined(__arm__) || defined(__thumb__)
     std::size_t n = 0;
-    while (n < max_len && (reg32(USART1_BASE + USART_SR) & (1U << 5))) {
+    while (n < max_len) {
+        const std::uint32_t sr = reg32(USART1_BASE + USART_SR);
+        if ((sr & ((1U << 3) | (1U << 2) | (1U << 1))) != 0U) {
+            (void)reg32(USART1_BASE + USART_DR);
+            return -1;
+        }
+        if ((sr & (1U << 5)) == 0U) {
+            break;
+        }
         out[n++] = static_cast<std::uint8_t>(reg32(USART1_BASE + USART_DR) & 0xFFU);
     }
     return static_cast<int>(n);
@@ -710,7 +742,15 @@ int SpeedyBeeF405WingBackend::uart1ReadBytes(std::uint8_t* out, std::size_t max_
 int SpeedyBeeF405WingBackend::uart2ReadBytes(std::uint8_t* out, std::size_t max_len) {
 #if defined(__arm__) || defined(__thumb__)
     std::size_t n = 0;
-    while (n < max_len && (reg32(USART2_BASE + USART_SR) & (1U << 5))) {
+    while (n < max_len) {
+        const std::uint32_t sr = reg32(USART2_BASE + USART_SR);
+        if ((sr & ((1U << 3) | (1U << 2) | (1U << 1))) != 0U) {
+            (void)reg32(USART2_BASE + USART_DR);
+            return -1;
+        }
+        if ((sr & (1U << 5)) == 0U) {
+            break;
+        }
         out[n++] = static_cast<std::uint8_t>(reg32(USART2_BASE + USART_DR) & 0xFFU);
     }
     return static_cast<int>(n);
@@ -897,7 +937,8 @@ bool SpeedyBeeF405WingBackend::readReceiverPulsesUs(std::array<int, 8>& out) {
                                                              : uart2ReadBytes(rx_tmp, sizeof(rx_tmp));
     last_uart_read_count_ = static_cast<std::uint32_t>(read_count < 0 ? 0 : read_count);
     if (read_count < 0) {
-        markError(receiver_diag_, "receiver_uart_read_failed");
+        markError(receiver_diag_, "receiver_uart_read_failed_or_hw_error");
+        receiver_diag_.last_u32 = last_uart_read_count_;
         return false;
     }
 
@@ -934,7 +975,11 @@ bool SpeedyBeeF405WingBackend::readReceiverPulsesUs(std::array<int, 8>& out) {
         return true;
     }
 
-    markError(receiver_diag_, "receiver_stale_or_invalid");
+    if (n > 0) {
+        markError(receiver_diag_, "receiver_no_valid_frame_crc_or_format");
+    } else {
+        markError(receiver_diag_, "receiver_stale_or_invalid");
+    }
     return false;
 }
 
