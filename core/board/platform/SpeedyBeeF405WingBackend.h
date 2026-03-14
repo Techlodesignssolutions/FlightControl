@@ -104,10 +104,10 @@ private:
 
     // IMU assumptions: ICM-42688-P register map on SPI1.
     std::uint8_t imu_whoami_{0};
-    float imu_gyro_scale_rad_s_per_lsb_{0.0010642f};
-    float imu_accel_scale_m_s2_per_lsb_{0.0023942f};
+    float imu_gyro_scale_rad_s_per_lsb_{0.0010642f}; // +/-2000 dps
+    float imu_accel_scale_m_s2_per_lsb_{0.0023942f}; // +/-8 g (ACCEL_CONFIG0=0x26)
 
-    // SPL06 calibration and conversion state on I2C1 address 0x76.
+    // SPL06 calibration and conversion state on I2C1 address 0x76 (16x oversampling).
     bool baro_cal_loaded_{false};
     std::int16_t c0_{0};
     std::int16_t c1_{0};
