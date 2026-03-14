@@ -14,6 +14,15 @@ constexpr int kReceiverModeCrsf = 1;
 constexpr int kReceiverModeSbus = 2;
 constexpr unsigned long kReceiverTimeoutUs = 120000;
 
+#if defined(SPEEDYBEE_CRSF_BAUD)
+constexpr std::uint32_t kCrsfBaud = SPEEDYBEE_CRSF_BAUD;
+#else
+constexpr std::uint32_t kCrsfBaud = 420000;
+#endif
+constexpr std::uint32_t kSbusBaud = 100000;
+constexpr std::uint32_t kUsart1PclkHz = 84000000;
+constexpr std::uint32_t kUsart2PclkHz = 42000000;
+
 constexpr std::array<int, 4> kPwmTimers{{
     speedybee_f405_wing::PWM0_TIMER,
     speedybee_f405_wing::PWM1_TIMER,
@@ -30,6 +39,7 @@ constexpr std::array<int, 4> kPwmChannels{{
 // Assumed and validated against SpeedyBee F405 Wing public docs/targets.
 constexpr std::uint8_t kImuWhoAmIReg = 0x75;
 constexpr std::uint8_t kImuWhoAmIExpected = 0x47; // ICM-42688-P
+constexpr std::uint8_t kImuDeviceConfig = 0x11;
 constexpr std::uint8_t kImuPwrMgmt0 = 0x4E;
 constexpr std::uint8_t kImuGyroConfig0 = 0x4F;
 constexpr std::uint8_t kImuAccelConfig0 = 0x50;
@@ -42,6 +52,7 @@ constexpr std::uint8_t kSpl06PrsCfg = 0x06;
 constexpr std::uint8_t kSpl06TmpCfg = 0x07;
 constexpr std::uint8_t kSpl06MeasCfg = 0x08;
 constexpr std::uint8_t kSpl06PrsB2 = 0x00;
+// PRS_CFG/TMP_CFG below are set for 16x oversampling so compensation scale=253952.
 
 constexpr std::size_t kCrsfMinFrameLen = 4;
 constexpr std::uint8_t kCrsfTypeRcChannelsPacked = 0x16;
@@ -258,6 +269,12 @@ unsigned long SpeedyBeeF405WingBackend::microsNow() {
     return static_cast<unsigned long>(elapsed.count());
 }
 
+
+std::uint32_t SpeedyBeeF405WingBackend::usartBrrFromPclk(std::uint32_t pclk_hz, std::uint32_t baud) {
+    if (baud == 0U) return 0U;
+    return static_cast<std::uint32_t>((pclk_hz + (baud / 2U)) / baud);
+}
+
 void SpeedyBeeF405WingBackend::markError(SubsystemDiag& diag, const char* reason) {
     diag.healthy = false;
     diag.last_error = reason;
@@ -344,7 +361,7 @@ bool SpeedyBeeF405WingBackend::initUart1HardwareForCrsf() {
     reg32(GPIOA_BASE + GPIO_AFRH) &= ~((0xFU << ((9 - 8) * 4)) | (0xFU << ((10 - 8) * 4)));
     reg32(GPIOA_BASE + GPIO_AFRH) |= ((7U << ((9 - 8) * 4)) | (7U << ((10 - 8) * 4)));
 
-    reg32(USART1_BASE + USART_BRR) = 200; // ~420k @84MHz
+    reg32(USART1_BASE + USART_BRR) = usartBrrFromPclk(kUsart1PclkHz, kCrsfBaud)
     reg32(USART1_BASE + USART_CR1) = (1U << 13) | (1U << 2) | (1U << 3);
     return true;
 #else
@@ -362,8 +379,9 @@ bool SpeedyBeeF405WingBackend::initUart2HardwareForSbus() {
     reg32(GPIOA_BASE + GPIO_AFRL) &= ~((0xFU << (2 * 4)) | (0xFU << (3 * 4)));
     reg32(GPIOA_BASE + GPIO_AFRL) |= ((7U << (2 * 4)) | (7U << (3 * 4)));
 
-    reg32(USART2_BASE + USART_BRR) = 420; // ~100k @42MHz
+    reg32(USART2_BASE + USART_BRR) = usartBrrFromPclk(kUsart2PclkHz, kSbusBaud)
     reg32(USART2_BASE + USART_CR2) = (2U << 12); // 2 stop bits
+    // SBUS assumes SpeedyBee board's UART2-RX hardware inverted input path.
     reg32(USART2_BASE + USART_CR1) = (1U << 13) | (1U << 2) | (1U << 3) | (1U << 10); // parity enable
     return true;
 #else
@@ -411,6 +429,16 @@ bool SpeedyBeeF405WingBackend::initTimerForLogicalPwmChannel(int logical_channel
         reg32(base + TIM_CCMR2) = ccmr2;
     }
 
+    const std::uint32_t safe_us = (logical_channel == 3) ? 1000U : 1500U;
+    const std::uint32_t safe_ticks = safe_us;
+    switch (ch) {
+        case 1: reg32(base + TIM_CCR1) = safe_ticks; break;
+        case 2: reg32(base + TIM_CCR2) = safe_ticks; break;
+        case 3: reg32(base + TIM_CCR3) = safe_ticks; break;
+        case 4: reg32(base + TIM_CCR4) = safe_ticks; break;
+        default: return false;
+    }
+
     reg32(base + TIM_CCER) |= (1U << ((ch - 1) * 4));
     reg32(base + TIM_CR1) |= 1U;
     return true;
@@ -425,6 +453,7 @@ bool SpeedyBeeF405WingBackend::imuReadReg(std::uint8_t reg, std::uint8_t& value)
     imuCsLow();
     (void)spi1TransferByte(static_cast<std::uint8_t>(reg | 0x80U));
     value = spi1TransferByte(0x00);
+    (void)waitFlag(SPI1_BASE + SPI_SR, (1U << 7), false);
     imuCsHigh();
     return true;
 #else
@@ -439,6 +468,7 @@ bool SpeedyBeeF405WingBackend::imuWriteReg(std::uint8_t reg, std::uint8_t value)
     imuCsLow();
     (void)spi1TransferByte(static_cast<std::uint8_t>(reg & 0x7FU));
     (void)spi1TransferByte(value);
+    (void)waitFlag(SPI1_BASE + SPI_SR, (1U << 7), false);
     imuCsHigh();
     return true;
 #else
@@ -453,6 +483,7 @@ bool SpeedyBeeF405WingBackend::imuReadRegs(std::uint8_t start_reg, std::uint8_t*
     imuCsLow();
     (void)spi1TransferByte(static_cast<std::uint8_t>(start_reg | 0x80U));
     for (std::size_t i = 0; i < len; ++i) dst[i] = spi1TransferByte(0x00);
+    (void)waitFlag(SPI1_BASE + SPI_SR, (1U << 7), false);
     imuCsHigh();
     return true;
 #else
@@ -464,13 +495,21 @@ bool SpeedyBeeF405WingBackend::imuReadRegs(std::uint8_t start_reg, std::uint8_t*
 }
 
 bool SpeedyBeeF405WingBackend::imuProbe() {
-    std::uint8_t who = 0;
-    if (!imuReadReg(kImuWhoAmIReg, who)) return false;
-    imu_whoami_ = who;
-    return who == kImuWhoAmIExpected;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        std::uint8_t who = 0;
+        if (!imuReadReg(kImuWhoAmIReg, who)) continue;
+        if (who == 0x00 || who == 0xFF) continue;
+        imu_whoami_ = who;
+        if (who == kImuWhoAmIExpected) return true;
+    }
+    return false;
 }
 
 bool SpeedyBeeF405WingBackend::imuConfigure() {
+    // Soft reset -> settle -> configure gyro +/-2000 dps and accel +/-8g at 1kHz (ACCEL_CONFIG0=0x26).
+    if (!imuWriteReg(kImuDeviceConfig, 0x01)) return false;
+    volatile std::uint32_t spin = 100000;
+    while (spin-- > 0) {}
     return imuWriteReg(kImuPwrMgmt0, 0x0F) && imuWriteReg(kImuGyroConfig0, 0x06) && imuWriteReg(kImuAccelConfig0, 0x26);
 }
 
@@ -498,12 +537,12 @@ bool SpeedyBeeF405WingBackend::imuReadSample(Stm32f4Platform::ImuRaw& out) {
 
 bool SpeedyBeeF405WingBackend::baroReadReg(std::uint8_t reg, std::uint8_t& value) {
 #if defined(__arm__) || defined(__thumb__)
-    if (!i2c1Start()) return false;
-    if (!i2c1SendAddr(static_cast<std::uint8_t>(speedybee_f405_wing::BARO_ADDR << 1))) return false;
-    if (!i2c1WriteByte(reg)) return false;
-    if (!i2c1Start()) return false;
-    if (!i2c1SendAddr(static_cast<std::uint8_t>((speedybee_f405_wing::BARO_ADDR << 1) | 1U))) return false;
-    if (!i2c1ReadByte(value, false)) return false;
+    if (!i2c1Start()) { i2c1Stop(); return false; }
+    if (!i2c1SendAddr(static_cast<std::uint8_t>(speedybee_f405_wing::BARO_ADDR << 1))) { i2c1Stop(); return false; }
+    if (!i2c1WriteByte(reg)) { i2c1Stop(); return false; }
+    if (!i2c1Start()) { i2c1Stop(); return false; }
+    if (!i2c1SendAddr(static_cast<std::uint8_t>((speedybee_f405_wing::BARO_ADDR << 1) | 1U))) { i2c1Stop(); return false; }
+    if (!i2c1ReadByte(value, false)) { i2c1Stop(); return false; }
     i2c1Stop();
     return true;
 #else
@@ -515,13 +554,13 @@ bool SpeedyBeeF405WingBackend::baroReadReg(std::uint8_t reg, std::uint8_t& value
 
 bool SpeedyBeeF405WingBackend::baroReadRegs(std::uint8_t reg, std::uint8_t* dst, std::size_t len) {
 #if defined(__arm__) || defined(__thumb__)
-    if (!i2c1Start()) return false;
-    if (!i2c1SendAddr(static_cast<std::uint8_t>(speedybee_f405_wing::BARO_ADDR << 1))) return false;
-    if (!i2c1WriteByte(reg)) return false;
-    if (!i2c1Start()) return false;
-    if (!i2c1SendAddr(static_cast<std::uint8_t>((speedybee_f405_wing::BARO_ADDR << 1) | 1U))) return false;
+    if (!i2c1Start()) { i2c1Stop(); return false; }
+    if (!i2c1SendAddr(static_cast<std::uint8_t>(speedybee_f405_wing::BARO_ADDR << 1))) { i2c1Stop(); return false; }
+    if (!i2c1WriteByte(reg)) { i2c1Stop(); return false; }
+    if (!i2c1Start()) { i2c1Stop(); return false; }
+    if (!i2c1SendAddr(static_cast<std::uint8_t>((speedybee_f405_wing::BARO_ADDR << 1) | 1U))) { i2c1Stop(); return false; }
     for (std::size_t i = 0; i < len; ++i) {
-        if (!i2c1ReadByte(dst[i], i + 1 < len)) return false;
+        if (!i2c1ReadByte(dst[i], i + 1 < len)) { i2c1Stop(); return false; }
     }
     i2c1Stop();
     return true;
@@ -535,10 +574,10 @@ bool SpeedyBeeF405WingBackend::baroReadRegs(std::uint8_t reg, std::uint8_t* dst,
 
 bool SpeedyBeeF405WingBackend::baroWriteReg(std::uint8_t reg, std::uint8_t value) {
 #if defined(__arm__) || defined(__thumb__)
-    if (!i2c1Start()) return false;
-    if (!i2c1SendAddr(static_cast<std::uint8_t>(speedybee_f405_wing::BARO_ADDR << 1))) return false;
-    if (!i2c1WriteByte(reg)) return false;
-    if (!i2c1WriteByte(value)) return false;
+    if (!i2c1Start()) { i2c1Stop(); return false; }
+    if (!i2c1SendAddr(static_cast<std::uint8_t>(speedybee_f405_wing::BARO_ADDR << 1))) { i2c1Stop(); return false; }
+    if (!i2c1WriteByte(reg)) { i2c1Stop(); return false; }
+    if (!i2c1WriteByte(value)) { i2c1Stop(); return false; }
     i2c1Stop();
     return true;
 #else
@@ -599,6 +638,8 @@ bool SpeedyBeeF405WingBackend::baroReadAltitude(float& altitude_m) {
     float pressure_pa = 0.0f;
     float temperature_c = 0.0f;
     if (!baroReadPressureTemp(pressure_pa, temperature_c)) return false;
+    last_baro_pressure_pa_ = pressure_pa;
+    last_baro_temperature_c_ = temperature_c;
     (void)temperature_c;
     if (pressure_pa <= 1000.0f) return false;
     altitude_m = 44330.0f * (1.0f - std::pow(pressure_pa / sea_level_pressure_pa_, 0.190295f));
@@ -633,6 +674,7 @@ bool SpeedyBeeF405WingBackend::pitotZeroAnalog() {
 bool SpeedyBeeF405WingBackend::pitotReadAnalogPa(float& dp_pa) {
     std::uint16_t counts = 0;
     if (!pitotReadRawCounts(counts)) return false;
+    last_pitot_counts_ = counts;
     if (!pitot_zeroed_ && !pitotZeroAnalog()) return false;
 
     constexpr float vref = 3.3f;
@@ -686,6 +728,7 @@ bool SpeedyBeeF405WingBackend::pwmWriteCompareUs(int logical_channel, float puls
     const int ch = kPwmChannels[static_cast<std::size_t>(logical_channel)];
     const std::uintptr_t base = (timer == 3) ? TIM3_BASE : TIM4_BASE;
     const std::uint32_t ticks = pwmUsToTicks(pulse_us);
+    last_pwm_ticks_ = ticks;
     switch (ch) {
         case 1: reg32(base + TIM_CCR1) = ticks; break;
         case 2: reg32(base + TIM_CCR2) = ticks; break;
@@ -713,6 +756,9 @@ bool SpeedyBeeF405WingBackend::ensureImuConfigured() {
     if (!imuReadSample(first)) { markError(imu_diag_, "imu_first_sample_failed"); return false; }
     imu_diag_.configured = true;
     markSample(imu_diag_, microsNow());
+    imu_diag_.last_value0 = first.gx_rad_s;
+    imu_diag_.last_value1 = first.ax_m_s2;
+    imu_diag_.last_u32 = imu_whoami_;
     return true;
 }
 
@@ -725,6 +771,8 @@ bool SpeedyBeeF405WingBackend::ensureBaroConfigured() {
     if (!baroReadAltitude(alt)) { markError(baro_diag_, "baro_first_sample_failed"); return false; }
     baro_diag_.configured = true;
     markSample(baro_diag_, microsNow());
+    baro_diag_.last_value0 = alt;
+    baro_diag_.last_value1 = last_baro_pressure_pa_;
     return true;
 }
 
@@ -735,6 +783,8 @@ bool SpeedyBeeF405WingBackend::ensurePitotConfigured() {
     if (!pitotReadAnalogPa(dp)) { markError(pitot_diag_, "pitot_first_sample_failed"); return false; }
     pitot_diag_.configured = true;
     markSample(pitot_diag_, microsNow());
+    pitot_diag_.last_value0 = dp;
+    pitot_diag_.last_u32 = last_pitot_counts_;
     return true;
 }
 
@@ -805,6 +855,9 @@ bool SpeedyBeeF405WingBackend::readImuRaw(Stm32f4Platform::ImuRaw& out) {
     if (!ensureImuConfigured()) return false;
     if (!imuReadSample(out)) { markError(imu_diag_, "imu_read_failed"); return false; }
     markSample(imu_diag_, microsNow());
+    imu_diag_.last_value0 = out.gx_rad_s;
+    imu_diag_.last_value1 = out.ax_m_s2;
+    imu_diag_.last_u32 = imu_whoami_;
     return true;
 }
 
@@ -813,6 +866,8 @@ bool SpeedyBeeF405WingBackend::readBaroAltitudeMeters(float& altitude_m) {
     if (!ensureBaroConfigured()) return false;
     if (!baroReadAltitude(altitude_m)) { markError(baro_diag_, "baro_read_failed"); return false; }
     markSample(baro_diag_, microsNow());
+    baro_diag_.last_value0 = altitude_m;
+    baro_diag_.last_value1 = last_baro_pressure_pa_;
     return true;
 }
 
@@ -821,6 +876,8 @@ bool SpeedyBeeF405WingBackend::readPitotDifferentialPressurePa(float& dp_pa) {
     if (!ensurePitotConfigured()) return false;
     if (!pitotReadAnalogPa(dp_pa)) { markError(pitot_diag_, "pitot_read_failed"); return false; }
     markSample(pitot_diag_, microsNow());
+    pitot_diag_.last_value0 = dp_pa;
+    pitot_diag_.last_u32 = last_pitot_counts_;
     return true;
 }
 
@@ -838,6 +895,7 @@ bool SpeedyBeeF405WingBackend::readReceiverPulsesUs(std::array<int, 8>& out) {
     std::uint8_t rx_tmp[64]{};
     const int read_count = (rx_mode_ == ReceiverMode::CRSF) ? uart1ReadBytes(rx_tmp, sizeof(rx_tmp))
                                                              : uart2ReadBytes(rx_tmp, sizeof(rx_tmp));
+    last_uart_read_count_ = static_cast<std::uint32_t>(read_count < 0 ? 0 : read_count);
     if (read_count < 0) {
         markError(receiver_diag_, "receiver_uart_read_failed");
         return false;
@@ -863,6 +921,9 @@ bool SpeedyBeeF405WingBackend::readReceiverPulsesUs(std::array<int, 8>& out) {
             out = last_receiver_us_;
             rx_last_frame_time_us_ = microsNow();
             markSample(receiver_diag_, rx_last_frame_time_us_);
+            receiver_diag_.last_u32 = last_uart_read_count_;
+            receiver_diag_.last_value0 = static_cast<float>(out[0]);
+            receiver_diag_.last_value1 = static_cast<float>(out[3]);
             return true;
         }
     }
@@ -891,7 +952,11 @@ bool SpeedyBeeF405WingBackend::writePwmMicros(int logical_channel, float pulse_u
         return false;
     }
 
-    last_pwm_us_[static_cast<std::size_t>(logical_channel)] = clamp(pulse_us, 800.0f, 2200.0f);
+    const float clamped_us = clamp(pulse_us, 800.0f, 2200.0f);
+    last_pwm_us_[static_cast<std::size_t>(logical_channel)] = clamped_us;
+    last_pwm_ticks_ = pwmUsToTicks(clamped_us);
     markSample(pwm_diag_, microsNow());
+    pwm_diag_.last_value0 = clamped_us;
+    pwm_diag_.last_u32 = last_pwm_ticks_;
     return true;
 }

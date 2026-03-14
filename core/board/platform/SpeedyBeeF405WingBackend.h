@@ -15,6 +15,11 @@ public:
         std::uint32_t sample_count{0};
         std::uint32_t error_count{0};
         const char* last_error{"none"};
+
+        // Lightweight bring-up visibility fields.
+        float last_value0{0.0f};
+        float last_value1{0.0f};
+        std::uint32_t last_u32{0};
     };
 
     bool initSpiBus(int bus_id) override;
@@ -44,6 +49,7 @@ private:
 
     static float clamp(float x, float lo, float hi);
     static unsigned long microsNow();
+    static std::uint32_t usartBrrFromPclk(std::uint32_t pclk_hz, std::uint32_t baud);
 
     // Real backend helpers.
     bool initSpi1Hardware();
@@ -136,4 +142,10 @@ private:
 
     unsigned long rx_last_frame_time_us_{0};
     std::uint32_t pwm_timer_tick_hz_{1000000U};
+
+    float last_baro_pressure_pa_{0.0f};
+    float last_baro_temperature_c_{0.0f};
+    std::uint16_t last_pitot_counts_{0};
+    std::uint32_t last_uart_read_count_{0};
+    std::uint32_t last_pwm_ticks_{0};
 };
