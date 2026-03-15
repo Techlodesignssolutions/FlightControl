@@ -22,6 +22,36 @@ float clampf(float value, float lo, float hi) {
     return std::max(lo, std::min(hi, value));
 }
 
+ScheduledLQR::ScheduleConfig buildFallbackScheduleConfig() {
+    ScheduledLQR::ScheduleConfig cfg;
+    cfg.version = 1;
+    cfg.name = "fallback_schedule";
+
+    ScheduledLQR::SchedulePoint low_speed;
+    low_speed.airspeed = 8.0f;
+    low_speed.roll.k_error = 2.1f;
+    low_speed.roll.k_rate = 0.21f;
+    low_speed.pitch.k_error = 2.5f;
+    low_speed.pitch.k_rate = 0.32f;
+    low_speed.yaw.k_error = 0.8f;
+    low_speed.yaw.k_rate = 0.10f;
+    low_speed.yaw_coord_gain = 0.25f;
+
+    ScheduledLQR::SchedulePoint cruise_speed;
+    cruise_speed.airspeed = 16.0f;
+    cruise_speed.roll.k_error = 1.8f;
+    cruise_speed.roll.k_rate = 0.18f;
+    cruise_speed.pitch.k_error = 2.2f;
+    cruise_speed.pitch.k_rate = 0.28f;
+    cruise_speed.yaw.k_error = 0.7f;
+    cruise_speed.yaw.k_rate = 0.08f;
+    cruise_speed.yaw_coord_gain = 0.20f;
+
+    cfg.points.push_back(low_speed);
+    cfg.points.push_back(cruise_speed);
+    return cfg;
+}
+
 }  // namespace
 
 // Constructor
@@ -49,12 +79,14 @@ bool FlightController::initializeControlStack() {
     ScheduledLQR::ScheduleConfig schedule;
     std::string error;
 
-    if (!scheduled_lqr_.loadFromJsonFile(config_.lqr_schedule_path, schedule, &error)) {
+    bool loaded_from_file =
+        scheduled_lqr_.loadFromJsonFile(config_.lqr_schedule_path, schedule, &error);
+    if (!loaded_from_file) {
         if (hal_) {
-            hal_->serialPrint("LQR schedule load failed: ");
+            hal_->serialPrint("LQR schedule load failed, using fallback: ");
             hal_->serialPrintln(error.c_str());
         }
-        return false;
+        schedule = buildFallbackScheduleConfig();
     }
 
     if (!scheduled_lqr_.configure(schedule, &error)) {
@@ -620,7 +652,6 @@ bool FlightController::saveConfiguration(void* data, std::size_t* size) const {
     std::memcpy(data, &packed, sizeof(PackedConfig));
     return true;
 }
-
 
 
 
