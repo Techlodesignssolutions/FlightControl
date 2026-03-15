@@ -130,8 +130,21 @@ FlightController* controller = nullptr;
 
 void setup() {
     pinMode(LED_BUILTIN, OUTPUT);
+    Serial.begin(115200);
+    delay(50);
+
     controller = new FlightController(&hal_adapter);
-    (void)controller->initialize();
+    if (!controller || !controller->initialize()) {
+        Serial.println("[Teensy] FlightController init failed");
+        while (true) {
+            digitalWrite(LED_BUILTIN, HIGH);
+            delay(150);
+            digitalWrite(LED_BUILTIN, LOW);
+            delay(150);
+        }
+    }
+
+    Serial.println("[Teensy] FlightController init OK");
 }
 
 void loop() {

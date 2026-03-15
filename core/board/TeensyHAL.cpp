@@ -246,12 +246,19 @@ bool TeensyHAL::initOutputs() {
         g_outputs[i].attach(config_.pwm_out_pins[i], config_.servo_min_us, config_.servo_max_us);
     }
 
-    writeServoUs(config_.pwm_left_elevon, config_.servo_neutral_us);
-    writeServoUs(config_.pwm_right_elevon, config_.servo_neutral_us);
-    writeServoUs(config_.pwm_rudder, config_.servo_neutral_us);
-    writeServoUs(config_.pwm_throttle, config_.throttle_min_us);
-
     outputs_initialized_ = true;
+
+    const bool ok =
+        writeServoUs(config_.pwm_left_elevon, config_.servo_neutral_us) &&
+        writeServoUs(config_.pwm_right_elevon, config_.servo_neutral_us) &&
+        writeServoUs(config_.pwm_rudder, config_.servo_neutral_us) &&
+        writeServoUs(config_.pwm_throttle, config_.throttle_min_us);
+
+    if (!ok) {
+        outputs_initialized_ = false;
+        return false;
+    }
+
     return true;
 #endif
 }
